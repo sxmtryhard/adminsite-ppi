@@ -1,0 +1,331 @@
+rules_version = '2';
+
+// ADMINSITE — Reglas de seguridad de Firestore.
+// La autorización real vive aquí: el frontend solo oculta lo que el usuario no puede usar.
+// Roles en users/{uid}.role: 'admin' | 'barber' | 'client'. Nadie puede asignarse su propio rol.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- Utilidades ----------
+    function path(collectionName, id) {
+      return /databases/$(database)/documents/$(collectionName)/$(id);
+    }
+    function signedIn() { return request.auth != null; }
+    function me() { return get(path('users', request.auth.uid)).data; }
+    function hasProfile() { return signedIn() && exists(path('users', request.auth.uid)); }
+    function isActive() { return hasProfile() && me().active == true; }
+    function isAdmin() { return isActive() && me().role == 'admin'; }
+    function isBarber() { return isActive() && me().role == 'barber'; }
+    function isClient() { return isActive() && me().role == 'client'; }
+    function isStaff() { return isAdmin() || isBarber(); }
+    function myBarberId() { return me().barberId; }
+    function emailVerified() { return request.auth.token.email_verified == true; }
+
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function onlyChanged(keys) { return incoming().diff(existing()).affectedKeys().hasOnly(keys); }
+
+    function isText(v, max) { return v is string && v.size() <= max; }
+    function isName(v) { return v is string && v.size() >= 2 && v.size() <= 80; }
+    function isMoney(v) { return v is int && v >= 0 && v <= 100000000; }
+    function isDate(v) { return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'); }
+    function isTime(v) { return v is string && v.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$'); }
+
+    // Política de cancelación configurable (config/business). 3 h si aún no se ha configurado.
+    function cancellationHours() {
+      return exists(path('config', 'business'))
+        ? get(path('config', 'business')).data.cancellationMinHours
+        : 3;
+    }
+
+    // ---------- Usuarios y roles ----------
+    match /users/{uid} {
+      allow read: if (signedIn() && request.auth.uid == uid) || isAdmin();
+
+      // Registro público: solo puede crear su propio perfil y siempre como cliente.
+      allow create: if signedIn() && request.auth.uid == uid
+        && incoming().keys().hasOnly(['email', 'displayName', 'role', 'phone', 'barberId', 'active', 'createdAt'])
+        && incoming().role == 'client'
+        && incoming().barberId == null
+        && incoming().active == true
+        && incoming().email == request.auth.token.email
+        && isName(incoming().displayName)
+        && isText(incoming().phone, 20)
+        && incoming().createdAt == request.time;
+
+      // Alta de personal: solo un administrador.
+      allow create: if isAdmin() && request.auth.uid != uid
+        && incoming().role in ['admin', 'barber']
+        && isName(incoming().displayName);
+
+      // El propio usuario solo cambia nombre y teléfono.
+      allow update: if signedIn() && request.auth.uid == uid
+        && onlyChanged(['displayName', 'phone'])
+        && isName(incoming().displayName)
+        && isText(incoming().phone, 20);
+
+      // El administrador gestiona rol, estado y vínculo con barbero de otros usuarios
+      // (no de sí mismo, para evitar quedarse sin acceso).
+      allow update: if isAdmin() && request.auth.uid != uid
+        && onlyChanged(['role', 'active', 'barberId', 'displayName'])
+        && incoming().role in ['admin', 'barber', 'client']
+        && incoming().active is bool;
+
+      allow delete: if false;
+    }
+
+    // ---------- Configuración del negocio ----------
+    match /config/{docId} {
+      allow read: if signedIn();
+      allow write: if isAdmin()
+        && incoming().cancellationMinHours is int && incoming().cancellationMinHours >= 0 && incoming().cancellationMinHours <= 72
+        && incoming().minLeadMinutes is int && incoming().minLeadMinutes >= 0
+        && incoming().bookingWindowDays is int && incoming().bookingWindowDays >= 1 && incoming().bookingWindowDays <= 180;
+    }
+
+    // ---------- Clientes ----------
+    match /clients/{clientId} {
+      // El barbero no lee la colección: recibe en la cita solo nombre y teléfono del cliente.
+      allow read: if isAdmin() || (signedIn() && request.auth.uid == clientId);
+
+      allow create: if signedIn() && request.auth.uid == clientId
+        && incoming().userId == request.auth.uid
+        && incoming().status == 'active'
+        && isName(incoming().fullName)
+        && isText(incoming().phone, 20)
+        && isText(incoming().notes, 300);
+      allow create: if isAdmin() && incoming().userId == null && isName(incoming().fullName);
+
+      allow update: if signedIn() && request.auth.uid == clientId
+        && onlyChanged(['fullName', 'phone', 'notes'])
+        && isName(incoming().fullName)
+        && isText(incoming().phone, 20)
+        && isText(incoming().notes, 300);
+      allow update: if isAdmin() && onlyChanged(['fullName', 'phone', 'notes', 'status', 'email']);
+
+      allow delete: if false; // se desactiva, no se borra (conserva historial)
+    }
+
+    // ---------- Barberos ----------
+    match /barbers/{barberId} {
+      // Información pública para reservar: nombre, especialidad y horario.
+      allow read: if signedIn();
+      allow create: if isAdmin() && isName(incoming().fullName) && incoming().status in ['active', 'inactive'];
+      allow update: if isAdmin();
+      // El barbero administra su propia disponibilidad.
+      allow update: if isBarber() && myBarberId() == barberId
+        && onlyChanged(['schedule', 'blockedDates']);
+      allow delete: if false;
+    }
+
+    match /barberPrivate/{barberId} {
+      allow read: if isAdmin() || (isBarber() && myBarberId() == barberId);
+      allow write: if isAdmin()
+        && (incoming().commissionRate == null
+          || (incoming().commissionRate is number && incoming().commissionRate >= 0 && incoming().commissionRate <= 100));
+    }
+
+    // ---------- Catálogo ----------
+    match /services/{serviceId} {
+      allow read: if signedIn();
+      allow create, update: if isAdmin()
+        && isName(incoming().name)
+        && isMoney(incoming().price)
+        && incoming().durationMinutes is int
+        && incoming().durationMinutes >= 5 && incoming().durationMinutes <= 120
+        && incoming().status in ['active', 'inactive'];
+      allow delete: if false;
+    }
+
+    match /serviceCosts/{serviceId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin() && (incoming().directCost == null || isMoney(incoming().directCost));
+    }
+
+    match /products/{productId} {
+      allow read: if signedIn();
+      allow create, update: if isAdmin()
+        && isName(incoming().name)
+        && isMoney(incoming().salePrice)
+        && incoming().stock is int && incoming().stock >= 0
+        && incoming().minStock is int && incoming().minStock >= 0;
+      allow delete: if false;
+    }
+
+    match /productCosts/{productId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin() && (incoming().avgCost == null || incoming().avgCost is number);
+    }
+
+    match /inventoryMovements/{movementId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin()
+        && incoming().createdBy == request.auth.uid
+        && incoming().quantity is int && incoming().quantity != 0
+        && incoming().stockAfter is int && incoming().stockAfter >= 0
+        && incoming().type in ['purchase', 'sale', 'sale_void', 'adjustment'];
+      allow update, delete: if false; // historial inmutable
+    }
+
+    // ---------- Agenda ----------
+    // Documentos de bloqueo: uno por barbero y franja de 15 min. Su existencia impide
+    // reservas superpuestas incluso con solicitudes simultáneas (create falla si ya existe).
+    match /slots/{slotId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && existsAfter(path('appointments', incoming().appointmentId))
+        && getAfter(path('appointments', incoming().appointmentId)).data.barberId == incoming().barberId
+        && getAfter(path('appointments', incoming().appointmentId)).data.date == incoming().date
+        && slotId in getAfter(path('appointments', incoming().appointmentId)).data.slotIds
+        && getAfter(path('appointments', incoming().appointmentId)).data.status in ['pending', 'confirmed', 'in_progress'];
+      allow update: if false;
+      // Se libera cuando la cita deja de ocuparla (cancelada/finalizada o reprogramada).
+      allow delete: if signedIn()
+        && (!existsAfter(path('appointments', existing().appointmentId))
+          || !(slotId in getAfter(path('appointments', existing().appointmentId)).data.slotIds)
+          || !(getAfter(path('appointments', existing().appointmentId)).data.status in ['pending', 'confirmed', 'in_progress']));
+    }
+
+    match /appointments/{appointmentId} {
+      function isOwnerClient(data) { return isClient() && data.clientId == request.auth.uid; }
+      function isAssignedBarber(data) { return isBarber() && data.barberId == myBarberId(); }
+      function canManage(data) { return isAdmin() || isAssignedBarber(data); }
+
+      // Franjas coherentes con la duración y el inicio; la primera y la última deben crearse
+      // en la misma transacción.
+      function slotsCoherent(data) {
+        return data.slotIds is list
+          && data.slotIds.size() == math.ceil(data.durationMinutes / 15.0)
+          && data.slotIds[0] == data.barberId + '_' + data.date + '_' + data.time.replace(':', '')
+          && existsAfter(path('slots', data.slotIds[0]))
+          && existsAfter(path('slots', data.slotIds[data.slotIds.size() - 1]));
+      }
+
+      function validTransition(from, to) {
+        return (from == 'pending' && to in ['confirmed', 'cancelled'])
+          || (from == 'confirmed' && to in ['in_progress', 'cancelled', 'no_show'])
+          || (from == 'in_progress' && to == 'completed');
+      }
+
+      function withinClientPolicy(startAt) {
+        return startAt > request.time + duration.value(cancellationHours(), 'h');
+      }
+
+      allow read: if isAdmin()
+        || (isBarber() && resource.data.barberId == myBarberId())
+        || (isClient() && resource.data.clientId == request.auth.uid);
+
+      allow create: if signedIn()
+        && incoming().createdBy == request.auth.uid
+        && incoming().saleId == null
+        && incoming().cancelReason == null
+        && isDate(incoming().date) && isTime(incoming().time)
+        && incoming().startAt is timestamp && incoming().startAt > request.time
+        && isText(incoming().notes, 300)
+        // Precio y duración vienen del catálogo, no del cliente.
+        && get(path('services', incoming().serviceId)).data.status == 'active'
+        && get(path('services', incoming().serviceId)).data.price == incoming().servicePrice
+        && get(path('services', incoming().serviceId)).data.durationMinutes == incoming().durationMinutes
+        && get(path('barbers', incoming().barberId)).data.status == 'active'
+        && slotsCoherent(incoming())
+        && (
+          (isClient() && emailVerified() && incoming().clientId == request.auth.uid && incoming().status == 'pending')
+          || (isAdmin() && incoming().status in ['pending', 'confirmed'])
+          || (isBarber() && incoming().barberId == myBarberId() && incoming().status in ['pending', 'confirmed'])
+        );
+
+      // Cambio de estado por el personal autorizado.
+      allow update: if canManage(existing())
+        && onlyChanged(['status', 'updatedAt', 'cancelReason'])
+        && validTransition(existing().status, incoming().status);
+
+      // Cancelación por el cliente dentro de la política.
+      allow update: if isOwnerClient(existing())
+        && onlyChanged(['status', 'updatedAt', 'cancelReason'])
+        && existing().status in ['pending', 'confirmed']
+        && incoming().status == 'cancelled'
+        && withinClientPolicy(existing().startAt);
+
+      // Reprogramación (mismo barbero y servicio).
+      allow update: if (canManage(existing()) || (isOwnerClient(existing())
+          && withinClientPolicy(existing().startAt)
+          && incoming().status == 'pending'))
+        && onlyChanged(['date', 'time', 'startAt', 'slotIds', 'updatedAt', 'status'])
+        && existing().status in ['pending', 'confirmed']
+        && incoming().status in ['pending', 'confirmed']
+        && isDate(incoming().date) && isTime(incoming().time)
+        && incoming().startAt is timestamp && incoming().startAt > request.time
+        && slotsCoherent(incoming());
+
+      // Vincular el cobro: una sola vez y solo para citas completadas.
+      allow update: if isAdmin()
+        && onlyChanged(['saleId', 'updatedAt'])
+        && ((existing().saleId == null && existing().status == 'completed'
+              && existsAfter(path('sales', incoming().saleId)))
+          || (existing().saleId != null && incoming().saleId == null
+              && getAfter(path('sales', existing().saleId)).data.status == 'voided'));
+
+      allow delete: if false; // se cancelan, no se borran
+    }
+
+    // ---------- Ventas, costos y gastos ----------
+    match /sales/{saleId} {
+      allow read: if isAdmin()
+        || (isBarber() && resource.data.barberId == myBarberId())
+        || (isClient() && resource.data.clientId == request.auth.uid);
+      allow create: if isAdmin()
+        && incoming().createdBy == request.auth.uid
+        && incoming().status == 'paid'
+        && isMoney(incoming().subtotal) && isMoney(incoming().discount) && isMoney(incoming().total)
+        && incoming().discount <= incoming().subtotal
+        && incoming().total == incoming().subtotal - incoming().discount
+        && incoming().items is list && incoming().items.size() > 0 && incoming().items.size() <= 10
+        && incoming().paymentMethod in ['cash', 'transfer', 'card'];
+      // Única modificación permitida: anular.
+      allow update: if isAdmin()
+        && existing().status == 'paid'
+        && incoming().status == 'voided'
+        && onlyChanged(['status', 'voidedAt', 'voidReason', 'voidedBy'])
+        && isText(incoming().voidReason, 200);
+      allow delete: if false;
+    }
+
+    match /saleCosts/{saleId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && existsAfter(path('sales', saleId));
+      allow update, delete: if false;
+    }
+
+    match /expenses/{expenseId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin()
+        && incoming().createdBy == request.auth.uid
+        && isMoney(incoming().amount) && incoming().amount > 0
+        && isDate(incoming().date)
+        && incoming().status == 'active';
+      allow update: if isAdmin() && existing().status == 'active'
+        && incoming().status == 'voided' && onlyChanged(['status']);
+      allow delete: if false;
+    }
+
+    // ---------- Auditoría y notificaciones ----------
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if hasProfile()
+        && incoming().actorUid == request.auth.uid
+        && incoming().at == request.time;
+      allow update, delete: if false;
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if hasProfile()
+        && incoming().actorUid == request.auth.uid
+        && incoming().read == false
+        && isText(incoming().title, 120)
+        && isText(incoming().body, 400);
+      allow update: if signedIn() && existing().userId == request.auth.uid && onlyChanged(['read']);
+      allow delete: if signedIn() && existing().userId == request.auth.uid;
+    }
+  }
+}

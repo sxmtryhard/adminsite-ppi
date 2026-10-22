@@ -1,22 +1,24 @@
+import type React from 'react';
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { AppLayout } from '@/layouts/AppLayout';
 import { LoginPage } from '@/pages/auth/LoginPage';
-import { DashboardPlaceholder } from '@/pages/dashboard/DashboardPlaceholder';
-import { ClientsPage } from '@/pages/clients/ClientsPage';
-import { ServicesPage } from '@/pages/services/ServicesPage';
-import { BarbersPage } from '@/pages/barbers/BarbersPage';
-import { AppointmentsPage } from '@/pages/appointments/AppointmentsPage';
-import { ProductsPage } from '@/pages/products/ProductsPage';
-import { PosPage } from '@/pages/pos/PosPage';
-import { HistoryPage } from '@/pages/history/HistoryPage';
-import { ReportsPage } from '@/pages/reports/ReportsPage';
-import { SettingsPage } from '@/pages/settings/SettingsPage';
-import { ProtectedRoute } from './ProtectedRoute';
+import { RegisterPage } from '@/pages/auth/RegisterPage';
+import { ForgotPasswordPage } from '@/pages/auth/ForgotPasswordPage';
+import { ProtectedRoute, PublicOnlyRoute, RoleRoute } from './ProtectedRoute';
+
+/** Carga diferida por ruta: cada rol descarga solo las pantallas que usa. */
+const page =
+  <M extends Record<string, unknown>>(loader: () => Promise<M>, name: keyof M & string) =>
+  async () => ({ Component: (await loader())[name] as React.ComponentType });
 
 export const router = createBrowserRouter([
   {
-    path: '/login',
-    element: <LoginPage />,
+    element: <PublicOnlyRoute />,
+    children: [
+      { path: '/login', element: <LoginPage /> },
+      { path: '/registro', element: <RegisterPage /> },
+      { path: '/recuperar', element: <ForgotPasswordPage /> },
+    ],
   },
   {
     element: <ProtectedRoute />,
@@ -26,59 +28,49 @@ export const router = createBrowserRouter([
         element: <AppLayout />,
         children: [
           {
-            index: true,
-            element: <DashboardPlaceholder />,
+            element: <RoleRoute roles={['admin']} />,
+            children: [
+              { index: true, lazy: page(() => import('@/pages/dashboard/DashboardPage'), 'DashboardPage') },
+              { path: 'citas', lazy: page(() => import('@/pages/appointments/AppointmentsPage'), 'AppointmentsPage') },
+              { path: 'ventas', lazy: page(() => import('@/pages/pos/PosPage'), 'PosPage') },
+              { path: 'caja', element: <Navigate to="/ventas" replace /> },
+              { path: 'historial', lazy: page(() => import('@/pages/history/HistoryPage'), 'HistoryPage') },
+              { path: 'reportes', lazy: page(() => import('@/pages/reports/ReportsPage'), 'ReportsPage') },
+              { path: 'clientes', lazy: page(() => import('@/pages/clients/ClientsPage'), 'ClientsPage') },
+              { path: 'servicios', lazy: page(() => import('@/pages/services/ServicesPage'), 'ServicesPage') },
+              { path: 'barberos', lazy: page(() => import('@/pages/barbers/BarbersPage'), 'BarbersPage') },
+              { path: 'productos', lazy: page(() => import('@/pages/products/ProductsPage'), 'ProductsPage') },
+              { path: 'gastos', lazy: page(() => import('@/pages/expenses/ExpensesPage'), 'ExpensesPage') },
+              { path: 'usuarios', lazy: page(() => import('@/pages/users/UsersPage'), 'UsersPage') },
+              { path: 'auditoria', lazy: page(() => import('@/pages/audit/AuditPage'), 'AuditPage') },
+              { path: 'configuracion', lazy: page(() => import('@/pages/settings/SettingsPage'), 'SettingsPage') },
+            ],
           },
           {
-            path: 'citas',
-            element: <AppointmentsPage />,
+            path: 'barbero',
+            element: <RoleRoute roles={['barber']} />,
+            children: [
+              { index: true, lazy: page(() => import('@/pages/barber/BarberHomePage'), 'BarberHomePage') },
+              { path: 'agenda', lazy: page(() => import('@/pages/barber/BarberAgendaPage'), 'BarberAgendaPage') },
+              { path: 'disponibilidad', lazy: page(() => import('@/pages/barber/BarberAvailabilityPage'), 'BarberAvailabilityPage') },
+            ],
           },
           {
-            path: 'ventas',
-            element: <PosPage />,
+            path: 'portal',
+            element: <RoleRoute roles={['client']} />,
+            children: [
+              { index: true, lazy: page(() => import('@/pages/portal/PortalHomePage'), 'PortalHomePage') },
+              { path: 'reservar', lazy: page(() => import('@/pages/portal/BookingPage'), 'BookingPage') },
+              { path: 'citas', lazy: page(() => import('@/pages/portal/MyAppointmentsPage'), 'MyAppointmentsPage') },
+              { path: 'catalogo', lazy: page(() => import('@/pages/portal/CatalogPage'), 'CatalogPage') },
+              { path: 'historial', lazy: page(() => import('@/pages/portal/ClientHistoryPage'), 'ClientHistoryPage') },
+              { path: 'perfil', lazy: page(() => import('@/pages/portal/ProfilePage'), 'ProfilePage') },
+            ],
           },
-          {
-            path: 'caja',
-            element: <PosPage />,
-          },
-          {
-            path: 'historial',
-            element: <HistoryPage />,
-          },
-          {
-            path: 'reportes',
-            element: <ReportsPage />,
-          },
-          {
-            path: 'clientes',
-            element: <ClientsPage />,
-          },
-          {
-            path: 'servicios',
-            element: <ServicesPage />,
-          },
-          {
-            path: 'barberos',
-            element: <BarbersPage />,
-          },
-          {
-            path: 'productos',
-            element: <ProductsPage />,
-          },
-          {
-            path: 'configuracion',
-            element: <SettingsPage />,
-          },
-          {
-            path: '*',
-            element: <Navigate to="/" replace />,
-          },
+          { path: '*', element: <Navigate to="/" replace /> },
         ],
       },
     ],
   },
-  {
-    path: '*',
-    element: <Navigate to="/login" replace />,
-  },
+  { path: '*', element: <Navigate to="/login" replace /> },
 ]);

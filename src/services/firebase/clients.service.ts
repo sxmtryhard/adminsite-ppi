@@ -1,61 +1,59 @@
-﻿import { 
-  collection, 
-  getDocs, 
-  addDoc, 
-  deleteDoc, 
-  doc, 
-  query, 
-  orderBy, 
-  serverTimestamp 
-} from 'firebase/firestore';
+﻿import { collection, doc, getDoc, getDocs, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from './firebase.config';
-import { Client, CreateClientDTO } from '@/types/client.types';
+import { str, strOrNull, toIso } from './helpers';
+import type { Client, CreateClientDTO } from '@/types/client.types';
+import { cleanText, normalizePhone } from '@/domain/validation';
 
 const COLLECTION_NAME = 'clients';
 
+const toClient = (id: string, data: Record<string, unknown>): Client => ({
+  id,
+  fullName: str(data.fullName),
+  email: str(data.email),
+  phone: str(data.phone),
+  notes: str(data.notes),
+  status: data.status === 'inactive' ? 'inactive' : 'active',
+  userId: strOrNull(data.userId),
+  createdAt: toIso(data.createdAt),
+});
+
 export const clientsService = {
+  /** Solo administrador (las reglas impiden a barberos y clientes listar la colección). */
   async getClients(): Promise<Client[]> {
-    try {
-      const q = query(collection(db, COLLECTION_NAME), orderBy('createdAt', 'desc'));
-      const snapshot = await getDocs(q);
-      
-      return snapshot.docs.map((docSnap) => {
-        const data = docSnap.data();
-        return {
-          id: docSnap.id,
-          fullName: data.fullName || '',
-          email: data.email || '',
-          phone: data.phone || '',
-          notes: data.notes || '',
-          status: data.status || 'active',
-          totalAppointments: data.totalAppointments || 0,
-          createdAt: data.createdAt?.toDate ? data.createdAt.toDate().toISOString() : new Date().toISOString(),
-        } as Client;
-      });
-    } catch {
-      throw new Error('No fue posible cargar el listado de clientes.');
-    }
+    const snapshot = await getDocs(collection(db, COLLECTION_NAME));
+    return snapshot.docs.map((d) => toClient(d.id, d.data())).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   },
 
-  async createClient(clientData: CreateClientDTO): Promise<string> {
-    try {
-      const docRef = await addDoc(collection(db, COLLECTION_NAME), {
-        ...clientData,
-        totalAppointments: 0,
-        createdAt: serverTimestamp(),
-      });
-      return docRef.id;
-    } catch {
-      throw new Error('No fue posible registrar al cliente.');
-    }
+  async getClient(id: string): Promise<Client | null> {
+    const snap = await getDoc(doc(db, COLLECTION_NAME, id));
+    return snap.exists() ? toClient(snap.id, snap.data()) : null;
   },
 
-  async deleteClient(id: string): Promise<void> {
-    try {
-      const docRef = doc(db, COLLECTION_NAME, id);
-      await deleteDoc(docRef);
-    } catch {
-      throw new Error('No fue posible eliminar el cliente.');
-    }
-  }
+  /** Cliente de mostrador creado por el administrador (sin cuenta en el portal). */
+  async createClient(dto: CreateClientDTO): Promise<string> {
+    const ref = doc(collection(db, COLLECTION_NAME));
+    await setDoc(ref, {
+      fullName: cleanText(dto.fullName, 80),
+      email: dto.email.trim().toLowerCase(),
+      phone: normalizePhone(dto.phone),
+      notes: cleanText(dto.notes, 300),
+      status: 'active',
+      userId: null,
+      createdAt: serverTimestamp(),
+    });
+    return ref.id;
+  },
+
+  async updateClient(id: string, data: Pick<Client, 'fullName' | 'phone' | 'notes'>): Promise<void> {
+    await updateDoc(doc(db, COLLECTION_NAME, id), {
+      fullName: cleanText(data.fullName, 80),
+      phone: normalizePhone(data.phone),
+      notes: cleanText(data.notes, 300),
+    });
+  },
+
+  /** Se desactiva en lugar de borrar para conservar el historial de citas y ventas. */
+  async setStatus(id: string, status: Client['status']): Promise<void> {
+    await updateDoc(doc(db, COLLECTION_NAME, id), { status });
+  },
 };

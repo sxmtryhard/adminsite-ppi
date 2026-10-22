@@ -1,33 +1,43 @@
 import React from 'react';
-import { Bell, Search } from 'lucide-react';
-import { Button } from '@/components/common/Button';
+import { Link } from 'react-router-dom';
+import { Menu, Plus } from 'lucide-react';
+import { useAuth } from '@/context/auth-context';
+import { NotificationBell } from './NotificationBell';
 
-export const Header: React.FC = () => {
+export const Header: React.FC<{ onOpenMenu: () => void }> = ({ onOpenMenu }) => {
+  const { user } = useAuth();
+  if (!user) return null;
+
+  const cta =
+    user.role === 'admin'
+      ? { to: '/citas?nueva=1', label: 'Nueva cita' }
+      : user.role === 'client'
+        ? { to: '/portal/reservar', label: 'Reservar' }
+        : null;
+
   return (
-    <header className="h-14 border-b border-border/50 px-6 flex items-center justify-between bg-neutral-950/40 backdrop-blur-md shrink-0">
-      <div className="flex items-center gap-3 w-72">
-        <div className="relative w-full">
-          <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-neutral-500" />
-          <input
-            type="text"
-            placeholder="Buscar clientes, citas o servicios..."
-            className="w-full h-8 pl-8 pr-3 rounded-md bg-neutral-900/60 border border-border/60 text-xs text-neutral-200 placeholder:text-neutral-500 focus:outline-none focus:border-neutral-500 transition-colors"
-          />
-        </div>
-      </div>
-
-      <div className="flex items-center gap-3">
-        <button
-          className="relative h-8 w-8 rounded-md flex items-center justify-center text-neutral-400 hover:text-neutral-200 hover:bg-neutral-900 transition-colors"
-          aria-label="Notificaciones"
-        >
-          <Bell className="h-4 w-4" />
-          <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-amber-500" />
-        </button>
-
-        <Button variant="outline" size="sm" className="h-8 text-xs font-medium">
-          + Nueva Cita
-        </Button>
+    <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-line bg-bg/80 px-4 backdrop-blur-md sm:px-6">
+      <button
+        onClick={onOpenMenu}
+        className="flex h-9 w-9 items-center justify-center rounded-full text-muted hover:bg-surface-2 lg:hidden"
+        aria-label="Abrir menú"
+      >
+        <Menu className="h-5 w-5" />
+      </button>
+      <p className="hidden text-sm text-muted sm:block">
+        Hola, <span className="font-medium text-ink">{user.displayName.split(' ')[0]}</span>
+      </p>
+      <div className="ml-auto flex items-center gap-2">
+        <NotificationBell userId={user.uid} />
+        {cta && (
+          <Link
+            to={cta.to}
+            className="inline-flex h-9 items-center gap-1.5 rounded-full bg-gradient-to-br from-accent to-accent-strong px-4 text-sm font-medium text-white shadow-[0_4px_14px_rgba(79,70,229,0.3)] transition hover:brightness-110"
+          >
+            <Plus className="h-4 w-4" aria-hidden />
+            {cta.label}
+          </Link>
+        )}
       </div>
     </header>
   );

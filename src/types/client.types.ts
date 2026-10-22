@@ -3,10 +3,12 @@ export interface Client {
   fullName: string;
   email: string;
   phone: string;
-  notes?: string;
+  /** Preferencias del cliente (visibles para el propio cliente). */
+  notes: string;
   status: 'active' | 'inactive';
-  totalAppointments: number;
+  /** UID de la cuenta del cliente si se registró en el portal; `null` = cliente de mostrador. */
+  userId: string | null;
   createdAt: string;
 }
 
-export type CreateClientDTO = Omit<Client, 'id' | 'totalAppointments' | 'createdAt'>;
+export type CreateClientDTO = Pick<Client, 'fullName' | 'email' | 'phone' | 'notes'>;

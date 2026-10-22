@@ -1,195 +1,236 @@
-import React, { useEffect, useState } from 'react';
-import { BarChart3, TrendingUp, Scissors, Package, Users, Banknote, CreditCard } from 'lucide-react';
-import { appointmentsService } from '@/services/firebase/appointments.service';
-import { salesService } from '@/services/firebase/sales.service';
-import { Appointment } from '@/types/appointment.types';
-import { Sale } from '@/types/sale.types';
+import React, { useState } from 'react';
+import { BarChart3, Download, LineChart, Package, Printer, Scissors, Users } from 'lucide-react';
+import { Card, PageHeader, Segmented } from '@/components/common/Layout';
+import { Button } from '@/components/common/Button';
+import { Input } from '@/components/common/Input';
+import { Alert, Spinner } from '@/components/common/Feedback';
+import { Badge } from '@/components/common/StatusBadge';
+import { BarList, TrendChart } from '@/components/charts/Charts';
+import { useFinanceData } from '@/hooks/useFinanceData';
+import { changePct, inPeriod, marginPct, saleDate, PERIOD_LABELS, periodFromPreset, type FinanceSummary, type PeriodPreset, type RankedItem } from '@/domain/finance';
+import { businessDate } from '@/domain/time';
+import { formatCOP, formatPct } from '@/lib/format';
+import { exportToCSV } from '@/utils/exportCsv';
+
+type Preset = PeriodPreset | 'custom';
+
+const Row: React.FC<{ label: string; value: number; prev?: number; strong?: boolean; negative?: boolean; note?: string }> = ({
+  label,
+  value,
+  prev,
+  strong,
+  negative,
+  note,
+}) => {
+  const delta = prev === undefined ? null : changePct(value, prev);
+  return (
+    <tr className={strong ? 'font-semibold' : undefined}>
+      <td>
+        {label}
+        {note && <span className="block text-xs font-normal text-subtle">{note}</span>}
+      </td>
+      <td className="text-right tabular-nums">{negative && value ? `−${formatCOP(value)}` : formatCOP(value)}</td>
+      <td className="text-right tabular-nums text-muted">{prev === undefined ? '' : formatCOP(prev)}</td>
+      <td className="text-right text-xs text-muted">{delta === null ? '—' : `${delta >= 0 ? '+' : ''}${delta.toFixed(1).replace('.', ',')} %`}</td>
+    </tr>
+  );
+};
+
+const Statement: React.FC<{ c: FinanceSummary; p: FinanceSummary }> = ({ c, p }) => (
+  <div className="overflow-x-auto">
+    <table className="table-base min-w-[560px]">
+      <thead>
+        <tr>
+          <th>Concepto</th>
+          <th className="text-right">Periodo</th>
+          <th className="text-right">Anterior</th>
+          <th className="text-right">Var.</th>
+        </tr>
+      </thead>
+      <tbody>
+        <Row label="Ingresos por servicios" value={c.serviceRevenue} prev={p.serviceRevenue} note="Netos de descuento prorrateado" />
+        <Row label="Ingresos por productos" value={c.productRevenue} prev={p.productRevenue} />
+        <Row label="Ingresos reconocidos" value={c.revenue} prev={p.revenue} strong note={`Descuentos otorgados: ${formatCOP(c.discounts)}`} />
+        <Row label="Costo directo de servicios" value={c.serviceCosts} prev={p.serviceCosts} negative />
+        <Row label="Costo de productos vendidos" value={c.cogs} prev={p.cogs} negative />
+        <Row label="Utilidad bruta" value={c.grossProfit} prev={p.grossProfit} strong note={`Margen bruto ${formatPct(c.grossMarginPct)}`} />
+        <Row label="Gastos operativos" value={c.operatingExpenses} prev={p.operatingExpenses} negative />
+        <Row label="Utilidad neta estimada" value={c.netProfit} prev={p.netProfit} strong note={`Margen neto ${formatPct(c.netMarginPct)}`} />
+        <Row label="Ventas anuladas (no incluidas)" value={c.voidedAmount} prev={p.voidedAmount} note={`${c.voidedSalesCount} anulaciones`} />
+      </tbody>
+    </table>
+  </div>
+);
+
+const ProfitTable: React.FC<{ items: RankedItem[]; empty: string }> = ({ items, empty }) =>
+  items.length === 0 ? (
+    <p className="py-6 text-center text-sm text-muted">{empty}</p>
+  ) : (
+    <div className="overflow-x-auto">
+      <table className="table-base min-w-[520px]">
+        <thead>
+          <tr>
+            <th>Ítem</th>
+            <th className="text-right">Cant.</th>
+            <th className="text-right">Ingreso</th>
+            <th className="text-right">Costo</th>
+            <th className="text-right">Margen</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((i) => (
+            <tr key={i.refId}>
+              <td>{i.name}</td>
+              <td className="text-right tabular-nums">{i.quantity}</td>
+              <td className="text-right tabular-nums">{formatCOP(i.revenue)}</td>
+              <td className="text-right tabular-nums">{i.cost === null ? <Badge tone="warning">Incompleto</Badge> : formatCOP(i.cost)}</td>
+              <td className="text-right tabular-nums">{i.profit === null ? '—' : formatPct(marginPct(i.profit, i.revenue))}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 
 export const ReportsPage: React.FC = () => {
-  const [loading, setLoading] = useState(true);
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [sales, setSales] = useState<Sale[]>([]);
+  const today = businessDate();
+  const [preset, setPreset] = useState<Preset>('month');
+  const [custom, setCustom] = useState({ from: `${today.slice(0, 7)}-01`, to: today });
+  const period = preset === 'custom' ? custom : periodFromPreset(preset, today);
+  const { data, loading, error } = useFinanceData(period);
+  const [notice, setNotice] = useState<string | null>(null);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const [apptsData, salesData] = await Promise.all([
-          appointmentsService.getAppointments(),
-          salesService.getSales(),
-        ]);
-        setAppointments(apptsData);
-        setSales(salesData);
-      } catch (err) {
-        console.error('Error cargando reportes:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchData();
-  }, []);
-
-  const formatCOP = (val: number) =>
-    new Intl.NumberFormat('es-CO', {
-      style: 'currency',
-      currency: 'COP',
-      maximumFractionDigits: 0,
-    }).format(val);
-
-  // 1. Desglose de ingresos
-  const completedAppts = appointments.filter((a) => a.status === 'completed');
-  const apptsRevenue = completedAppts.reduce((sum, a) => sum + (a.servicePrice || 0), 0);
-  const posRevenue = sales.reduce((sum, s) => sum + (s.total || 0), 0);
-  const totalGrossRevenue = apptsRevenue + posRevenue;
-
-  // 2. Métodos de pago en POS
-  const cashTotal = sales
-    .filter((s) => s.paymentMethod === 'cash')
-    .reduce((sum, s) => sum + s.total, 0);
-  const transferTotal = sales
-    .filter((s) => s.paymentMethod === 'transfer')
-    .reduce((sum, s) => sum + s.total, 0);
-
-  // 3. Top Servicios más realizados
-  const serviceCountMap: Record<string, number> = {};
-  completedAppts.forEach((a) => {
-    serviceCountMap[a.serviceName] = (serviceCountMap[a.serviceName] || 0) + 1;
-  });
-  sales.forEach((s) => {
-    s.items.forEach((item) => {
-      if (item.type === 'service') {
-        serviceCountMap[item.name] = (serviceCountMap[item.name] || 0) + item.quantity;
-      }
-    });
-  });
-
-  const sortedServices = Object.entries(serviceCountMap)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 5);
-
-  // 4. Rendimiento por Barbero
-  const barberMap: Record<string, { count: number; total: number }> = {};
-  completedAppts.forEach((a) => {
-    const name = a.barberName || 'Sin asignar';
-    if (!barberMap[name]) barberMap[name] = { count: 0, total: 0 };
-    barberMap[name].count += 1;
-    barberMap[name].total += a.servicePrice || 0;
-  });
-  sales.forEach((s) => {
-    if (s.barberName) {
-      const name = s.barberName;
-      if (!barberMap[name]) barberMap[name] = { count: 0, total: 0 };
-      barberMap[name].total += s.total;
-    }
-  });
+  const exportStatement = () => {
+    if (!data) return;
+    const c = data.current;
+    const rows = [
+      ['Ingresos por servicios', c.serviceRevenue],
+      ['Ingresos por productos', c.productRevenue],
+      ['Ingresos reconocidos', c.revenue],
+      ['Descuentos', c.discounts],
+      ['Costo directo de servicios', c.serviceCosts],
+      ['Costo de productos vendidos', c.cogs],
+      ['Utilidad bruta', c.grossProfit],
+      ['Margen bruto %', c.grossMarginPct === null ? 'N/A' : c.grossMarginPct.toFixed(2)],
+      ['Gastos operativos', c.operatingExpenses],
+      ['Utilidad neta estimada', c.netProfit],
+      ['Margen neto %', c.netMarginPct === null ? 'N/A' : c.netMarginPct.toFixed(2)],
+      ['Ventas pagadas', c.paidSalesCount],
+      ['Ventas anuladas', c.voidedSalesCount],
+      ['Costos completos', c.costsComplete ? 'Sí' : `No (${c.itemsMissingCost} líneas sin costo)`],
+    ].map(([concepto, valor]) => ({ concepto, valor }));
+    const ok = exportToCSV(`estado_resultados_${period.from}_${period.to}`, rows, [
+      { key: 'concepto', label: 'Concepto' },
+      { key: 'valor', label: 'Valor (COP)' },
+    ]);
+    setNotice(ok ? null : 'No hay datos para exportar.');
+  };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight text-neutral-100">Reportes Financieros y Métricas</h1>
-        <p className="text-xs text-neutral-400">Balance operativo general y estadísticas de XAC Barber Studio</p>
+    <>
+      <PageHeader
+        title="Reportes financieros y operativos"
+        description={`Periodo ${period.from} a ${period.to}, comparado con el periodo anterior de igual duración.`}
+        actions={
+          <>
+            <Button variant="outline" onClick={() => window.print()}>
+              <Printer className="h-4 w-4" aria-hidden /> PDF
+            </Button>
+            <Button variant="outline" onClick={exportStatement} disabled={!data}>
+              <Download className="h-4 w-4" aria-hidden /> Excel (CSV)
+            </Button>
+          </>
+        }
+      />
+      <div className="no-print flex flex-wrap items-end gap-3">
+        <Segmented
+          label="Periodo"
+          value={preset}
+          onChange={setPreset}
+          options={[...(['7d', '30d', 'month', 'prev_month'] as PeriodPreset[]).map((v) => ({ value: v as Preset, label: PERIOD_LABELS[v] })), { value: 'custom', label: 'Personalizado' }]}
+        />
+        {preset === 'custom' && (
+          <div className="grid grid-cols-2 gap-2 sm:w-80">
+            <Input label="Desde" type="date" value={custom.from} onChange={(e) => setCustom({ ...custom, from: e.target.value })} />
+            <Input label="Hasta" type="date" min={custom.from} max={today} value={custom.to} onChange={(e) => setCustom({ ...custom, to: e.target.value })} />
+          </div>
+        )}
       </div>
+      {error && <Alert>{error}</Alert>}
+      {notice && <Alert tone="info">{notice}</Alert>}
+      {data && !data.current.costsComplete && (
+        <Alert tone="warning">
+          Indicadores incompletos: {data.current.itemsMissingCost} línea(s) vendida(s) no tienen costo configurado (se cuentan como 0). Configura el costo
+          en Servicios o registra entradas de inventario con su costo.
+        </Alert>
+      )}
 
-      {/* Métricas Generales */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="p-4 rounded-xl border border-neutral-800 bg-neutral-950 space-y-1">
-          <div className="flex items-center justify-between text-neutral-400">
-            <span className="text-xs font-medium">Facturación Global</span>
-            <TrendingUp className="h-4 w-4 text-emerald-400" />
-          </div>
-          <p className="text-xl font-bold font-mono text-neutral-100">
-            {loading ? '...' : formatCOP(totalGrossRevenue)}
-          </p>
-          <p className="text-[11px] text-neutral-500">Citas finalizadas + Caja de mostrador</p>
+      {loading || !data ? (
+        <div className="card">
+          <Spinner />
         </div>
+      ) : (
+        <>
+          <Card title="Estado de resultados" icon={BarChart3} bodyClassName="p-0">
+            <Statement c={data.current} p={data.previous} />
+          </Card>
 
-        <div className="p-4 rounded-xl border border-neutral-800 bg-neutral-950 space-y-1">
-          <div className="flex items-center justify-between text-neutral-400">
-            <span className="text-xs font-medium">Ingresos por Agenda</span>
-            <Scissors className="h-4 w-4 text-blue-400" />
-          </div>
-          <p className="text-xl font-bold font-mono text-neutral-100">
-            {loading ? '...' : formatCOP(apptsRevenue)}
-          </p>
-          <p className="text-[11px] text-neutral-500">{completedAppts.length} citas completadas</p>
-        </div>
+          <Card title="Evolución diaria: ingresos frente a costos" icon={LineChart}>
+            <TrendChart
+              dates={data.series.map((s) => s.date)}
+              series={[
+                { label: 'Ingresos', color: 'rgb(99 102 241)', values: data.series.map((s) => s.revenue) },
+                { label: 'Costos directos', color: 'rgb(251 191 36)', values: data.series.map((s) => s.directCosts) },
+                { label: 'Gastos operativos', color: 'rgb(248 113 113)', values: data.series.map((s) => s.expenses) },
+              ]}
+            />
+          </Card>
 
-        <div className="p-4 rounded-xl border border-neutral-800 bg-neutral-950 space-y-1">
-          <div className="flex items-center justify-between text-neutral-400">
-            <span className="text-xs font-medium">Ingresos por Caja / POS</span>
-            <Package className="h-4 w-4 text-amber-400" />
-          </div>
-          <p className="text-xl font-bold font-mono text-neutral-100">
-            {loading ? '...' : formatCOP(posRevenue)}
-          </p>
-          <p className="text-[11px] text-neutral-500">{sales.length} ventas procesadas</p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Rendimiento de Barberos */}
-        <div className="border border-neutral-800 bg-neutral-950 rounded-xl p-5 space-y-4">
-          <div className="flex items-center gap-2 text-neutral-200 text-sm font-semibold">
-            <Users className="h-4 w-4 text-neutral-400" />
-            <span>Rendimiento del Staff</span>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Card title="Rentabilidad por servicio" icon={Scissors} bodyClassName="p-0">
+              <ProfitTable items={data.topServices} empty="Sin servicios vendidos." />
+            </Card>
+            <Card title="Rentabilidad por producto" icon={Package} bodyClassName="p-0">
+              <ProfitTable items={data.topProducts} empty="Sin productos vendidos." />
+            </Card>
           </div>
 
-          <div className="divide-y divide-neutral-800/60">
-            {loading ? (
-              <p className="text-xs text-neutral-500 py-4">Cargando datos...</p>
-            ) : Object.keys(barberMap).length === 0 ? (
-              <p className="text-xs text-neutral-500 py-4">No hay servicios asociados a barberos aún.</p>
-            ) : (
-              Object.entries(barberMap).map(([name, stat]) => (
-                <div key={name} className="py-2.5 flex items-center justify-between text-xs">
-                  <div>
-                    <p className="font-medium text-neutral-200">{name}</p>
-                    <p className="text-[11px] text-neutral-500">{stat.count} servicios completados</p>
-                  </div>
-                  <span className="font-mono font-semibold text-emerald-400">{formatCOP(stat.total)}</span>
-                </div>
-              ))
-            )}
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Card title="Desempeño por barbero" icon={Users}>
+              <BarList
+                emptyText="Sin servicios atribuidos a barberos."
+                items={data.barbers.map((b) => ({
+                  key: b.barberId,
+                  label: b.barberName,
+                  value: b.serviceRevenue,
+                  display: formatCOP(b.serviceRevenue),
+                  sub: `${b.servicesCount} servicios cobrados · ${b.completedAppointments} citas completadas · productos ${formatCOP(b.productRevenue)}`,
+                }))}
+              />
+            </Card>
+            <Card title="Clientes recurrentes" icon={Users}>
+              <BarList
+                emptyText="Sin clientes identificados en las ventas."
+                items={Object.values(
+                  data.sales
+                    .filter((s) => s.status === 'paid' && s.clientId && inPeriod(saleDate(s), period))
+                    .reduce<Record<string, { key: string; label: string; value: number; total: number }>>((acc, s) => {
+                      const k = s.clientId as string;
+                      acc[k] = acc[k] ?? { key: k, label: s.clientName || 'Cliente', value: 0, total: 0 };
+                      acc[k].value += 1;
+                      acc[k].total += s.total;
+                      return acc;
+                    }, {})
+                )
+                  .filter((c) => c.value > 1)
+                  .sort((a, b) => b.value - a.value)
+                  .slice(0, 8)
+                  .map((c) => ({ key: c.key, label: c.label, value: c.value, display: `${c.value} visitas`, sub: formatCOP(c.total) }))}
+              />
+            </Card>
           </div>
-        </div>
-
-        {/* Canales de Pago */}
-        <div className="border border-neutral-800 bg-neutral-950 rounded-xl p-5 space-y-4">
-          <div className="flex items-center gap-2 text-neutral-200 text-sm font-semibold">
-            <BarChart3 className="h-4 w-4 text-neutral-400" />
-            <span>Métodos de Pago en Mostrador</span>
-          </div>
-
-          <div className="space-y-3 pt-2">
-            <div className="flex items-center justify-between p-3 rounded-lg border border-neutral-800 bg-neutral-900/30">
-              <div className="flex items-center gap-2 text-xs text-neutral-300">
-                <Banknote className="h-4 w-4 text-emerald-400" />
-                <span>Efectivo en Caja</span>
-              </div>
-              <span className="text-xs font-mono font-bold text-neutral-100">{formatCOP(cashTotal)}</span>
-            </div>
-
-            <div className="flex items-center justify-between p-3 rounded-lg border border-neutral-800 bg-neutral-900/30">
-              <div className="flex items-center gap-2 text-xs text-neutral-300">
-                <CreditCard className="h-4 w-4 text-blue-400" />
-                <span>Transferencias / Bancos</span>
-              </div>
-              <span className="text-xs font-mono font-bold text-neutral-100">{formatCOP(transferTotal)}</span>
-            </div>
-          </div>
-
-          <div className="pt-2">
-            <p className="text-xs font-medium text-neutral-400 mb-2">Servicios más solicitados</p>
-            <div className="space-y-1.5">
-              {sortedServices.map(([sName, count]) => (
-                <div key={sName} className="flex justify-between text-xs text-neutral-300">
-                  <span className="truncate">{sName}</span>
-                  <span className="font-mono text-neutral-500">{count} veces</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+        </>
+      )}
+    </>
   );
 };
