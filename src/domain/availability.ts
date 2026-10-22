@@ -112,3 +112,7 @@ export const pickAnyBarber = <T extends { barber: { id: string; fullName: string
 /** Unión ordenada de horarios de varios barberos. */
 export const mergeTimes = (options: { times: string[] }[]): string[] =>
   [...new Set(options.flatMap((o) => o.times))].sort();
+
+/** true si el barbero tiene al menos un día laborable válido configurado. */
+export const hasWorkingDays = (schedule: WeeklySchedule): boolean =>
+  Object.values(schedule).some((day) => day !== null && isValidDaySchedule(day));

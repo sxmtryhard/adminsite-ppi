@@ -1,4 +1,5 @@
 import {
+  addDoc,
   collection,
   deleteDoc,
   doc,
@@ -33,6 +34,7 @@ export const notificationsService = {
     for (const userId of recipients) {
       batch.set(doc(collection(db, 'notifications')), {
         userId,
+        audience: null,
         title: input.title.slice(0, 120),
         body: input.body.slice(0, 400),
         link: input.link,
@@ -44,13 +46,43 @@ export const notificationsService = {
     await batch.commit();
   },
 
-  subscribe(userId: string, onChange: (items: AppNotification[]) => void, onError: (err: unknown) => void) {
-    const q = query(collection(db, 'notifications'), where('userId', '==', userId), limit(50));
-    return onSnapshot(
-      q,
-      (snap) => {
-        const items = snap.docs
-          .map((d) => {
+  /**
+   * Aviso para la bandeja compartida de administración (todos los administradores lo ven;
+   * marcarlo como leído lo marca para todos). Quien lo genera no necesita conocer a los admins.
+   */
+  async notifyAdmins(input: Omit<NotificationInput, 'userIds'>, actor: Actor): Promise<void> {
+    await addDoc(collection(db, 'notifications'), {
+      userId: null,
+      audience: 'admin',
+      title: input.title.slice(0, 120),
+      body: input.body.slice(0, 400),
+      link: input.link,
+      read: false,
+      actorUid: actor.uid,
+      createdAt: serverTimestamp(),
+    });
+  },
+
+  /** Notificaciones personales; los administradores reciben además la bandeja compartida. */
+  subscribe(
+    userId: string,
+    includeAdminInbox: boolean,
+    onChange: (items: AppNotification[]) => void,
+    onError: (err: unknown) => void
+  ) {
+    const base = collection(db, 'notifications');
+    const queries = [query(base, where('userId', '==', userId), limit(50))];
+    if (includeAdminInbox) queries.push(query(base, where('audience', '==', 'admin'), limit(50)));
+
+    const results = queries.map(() => [] as AppNotification[]);
+    const emit = () =>
+      onChange(results.flat().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 50));
+
+    const unsubscribers = queries.map((q, idx) =>
+      onSnapshot(
+        q,
+        (snap) => {
+          results[idx] = snap.docs.map((d) => {
             const data = d.data();
             return {
               id: d.id,
@@ -61,12 +93,13 @@ export const notificationsService = {
               read: data.read === true,
               createdAt: toIso(data.createdAt),
             };
-          })
-          .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-        onChange(items);
-      },
-      onError
+          });
+          emit();
+        },
+        onError
+      )
     );
+    return () => unsubscribers.forEach((u) => u());
   },
 
   markRead: (id: string) => updateDoc(doc(db, 'notifications', id), { read: true }),

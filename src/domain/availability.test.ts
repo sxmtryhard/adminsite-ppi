@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WeeklySchedule } from '@/types/barber.types';
-import { availableStartTimes, isValidDaySchedule, mergeTimes, pickAnyBarber, slotCount, slotKeysFor, type AvailabilityInput } from './availability';
+import { availableStartTimes, hasWorkingDays, isValidDaySchedule, mergeTimes, pickAnyBarber, slotCount, slotKeysFor, type AvailabilityInput } from './availability';
 import { businessDate, businessMinutes, toInstant } from './time';
 
 // 2026-10-26 es lunes.
@@ -108,5 +108,13 @@ describe('cualquier barbero', () => {
   });
   it('une los horarios sin duplicados', () => {
     expect(mergeTimes(options)).toEqual(['09:00', '10:00', '11:00', '12:00']);
+  });
+});
+
+describe('hasWorkingDays', () => {
+  it('detecta barberos sin jornada configurada (p. ej. creados con la versión anterior)', () => {
+    expect(hasWorkingDays(schedule)).toBe(true);
+    expect(hasWorkingDays({})).toBe(false);
+    expect(hasWorkingDays({ '1': null, '2': { start: '18:00', end: '09:00' } })).toBe(false);
   });
 });

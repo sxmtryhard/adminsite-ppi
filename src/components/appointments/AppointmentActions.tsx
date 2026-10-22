@@ -45,7 +45,7 @@ export const AppointmentActions: React.FC<{
         { role: user.role, cancellationMinHours: settings.cancellationMinHours, reason },
         actor
       );
-      await appointmentEvents.statusChanged(result.appointment, to, result, actor).catch(() => undefined);
+      await appointmentEvents.statusChanged(result.appointment, to, result, actor, user.role).catch(() => undefined);
       onChanged();
     } catch (err) {
       // Desde el diálogo de confirmación el error se muestra dentro del propio diálogo.

@@ -28,7 +28,7 @@ export const Header: React.FC<{ onOpenMenu: () => void }> = ({ onOpenMenu }) => 
         Hola, <span className="font-medium text-ink">{user.displayName.split(' ')[0]}</span>
       </p>
       <div className="ml-auto flex items-center gap-2">
-        <NotificationBell userId={user.uid} />
+        <NotificationBell userId={user.uid} isAdmin={user.role === 'admin'} />
         {cta && (
           <Link
             to={cta.to}

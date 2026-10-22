@@ -1,6 +1,7 @@
 import { notificationsService } from './firebase/notifications.service';
 import type { Actor } from './firebase/helpers';
 import type { Appointment, AppointmentStatus } from '@/types/appointment.types';
+import type { UserRole } from '@/types/auth.types';
 import { STATUS_LABELS } from '@/domain/appointmentStatus';
 import { formatLongDate } from '@/domain/time';
 
@@ -10,8 +11,18 @@ import { formatLongDate } from '@/domain/time';
  */
 const when = (a: Pick<Appointment, 'date' | 'time'>) => `${formatLongDate(a.date)} a las ${a.time}`;
 
+/** Lo que hace un administrador no se le notifica a la propia administración. */
+const toAdmins = (actorRole: UserRole, title: string, body: string, actor: Actor) =>
+  actorRole === 'admin' ? Promise.resolve() : notificationsService.notifyAdmins({ title, body, link: '/citas' }, actor);
+
 export const appointmentEvents = {
-  async booked(a: Appointment, parties: { clientUserId: string | null; barberUserId: string | null }, actor: Actor) {
+  async booked(
+    a: Appointment,
+    parties: { clientUserId: string | null; barberUserId: string | null },
+    actor: Actor,
+    actorRole: UserRole
+  ) {
+    await toAdmins(actorRole, 'Nueva reserva', `${a.clientName} reservó ${a.serviceName} con ${a.barberName} el ${when(a)}.`, actor);
     await notificationsService.notify(
       {
         userIds: [parties.barberUserId],
@@ -36,8 +47,12 @@ export const appointmentEvents = {
     a: Appointment,
     to: AppointmentStatus,
     parties: { clientUserId: string | null; barberUserId: string | null },
-    actor: Actor
+    actor: Actor,
+    actorRole: UserRole
   ) {
+    if (to === 'cancelled') {
+      await toAdmins(actorRole, 'Cita cancelada', `${a.clientName} · ${a.serviceName} con ${a.barberName} el ${when(a)}.`, actor);
+    }
     await notificationsService.notify(
       {
         userIds: [parties.clientUserId, parties.barberUserId],
@@ -49,7 +64,13 @@ export const appointmentEvents = {
     );
   },
 
-  async rescheduled(a: Appointment, parties: { clientUserId: string | null; barberUserId: string | null }, actor: Actor) {
+  async rescheduled(
+    a: Appointment,
+    parties: { clientUserId: string | null; barberUserId: string | null },
+    actor: Actor,
+    actorRole: UserRole
+  ) {
+    await toAdmins(actorRole, 'Cita reprogramada', `${a.clientName} · ${a.serviceName} con ${a.barberName}, ahora el ${when(a)}.`, actor);
     await notificationsService.notify(
       {
         userIds: [parties.clientUserId, parties.barberUserId],

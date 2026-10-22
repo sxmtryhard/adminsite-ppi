@@ -6,7 +6,7 @@ import type { AppNotification } from '@/types/notification.types';
 import { formatDateTime } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
-export const NotificationBell: React.FC<{ userId: string }> = ({ userId }) => {
+export const NotificationBell: React.FC<{ userId: string; isAdmin: boolean }> = ({ userId, isAdmin }) => {
   const [items, setItems] = useState<AppNotification[]>([]);
   const [error, setError] = useState(false);
   const [open, setOpen] = useState(false);
@@ -17,13 +17,14 @@ export const NotificationBell: React.FC<{ userId: string }> = ({ userId }) => {
     () =>
       notificationsService.subscribe(
         userId,
+        isAdmin,
         (list) => {
           setItems(list);
           setError(false);
         },
         () => setError(true)
       ),
-    [userId]
+    [userId, isAdmin]
   );
 
   useEffect(() => {

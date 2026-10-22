@@ -1,11 +1,12 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CalendarX, Check, ChevronLeft, Clock, Scissors, Sparkles, UserRound } from 'lucide-react';
+import { Check, ChevronLeft, Clock, Scissors, Sparkles, UserRound } from 'lucide-react';
 import { PageHeader } from '@/components/common/Layout';
 import { Button } from '@/components/common/Button';
 import { Input, Textarea } from '@/components/common/Input';
 import { Alert, EmptyState, Spinner } from '@/components/common/Feedback';
 import { VerifyEmailBanner } from '@/components/common/VerifyEmailBanner';
+import { NoTimesMessage } from '@/components/appointments/NoTimesMessage';
 import { TimeGrid } from '@/components/appointments/TimeGrid';
 import { useAsync } from '@/hooks/useAsync';
 import { useAvailability } from '@/hooks/useAvailability';
@@ -79,7 +80,7 @@ export const BookingPage: React.FC = () => {
       const parties = { clientUserId: user.uid, barberUserId: assigned.userId };
       const id = await appointmentsService.book(input, { status: 'pending', ...parties }, actor);
       const created = { ...input, id, status: 'pending' } as Appointment;
-      await appointmentEvents.booked(created, parties, actor).catch(() => undefined);
+      await appointmentEvents.booked(created, parties, actor, user.role).catch(() => undefined);
       setDone(created);
     } catch (err) {
       setError(toUserMessage(err, 'No fue posible completar la reserva.'));
@@ -232,7 +233,7 @@ export const BookingPage: React.FC = () => {
               ) : availability.error ? (
                 <Alert>{availability.error}</Alert>
               ) : times.length === 0 ? (
-                <EmptyState icon={CalendarX} title="No hay horarios disponibles ese día" description="Prueba otra fecha u otro barbero." />
+                <NoTimesMessage barbers={candidates} />
               ) : (
                 <TimeGrid times={times} value={time} onChange={setTime} label="Horarios disponibles" />
               )}

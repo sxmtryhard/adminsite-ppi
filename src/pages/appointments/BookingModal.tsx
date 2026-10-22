@@ -1,9 +1,9 @@
 import React, { useMemo, useState } from 'react';
-import { CalendarX } from 'lucide-react';
 import { Modal } from '@/components/common/Modal';
 import { Button } from '@/components/common/Button';
 import { Input, Select, Textarea } from '@/components/common/Input';
-import { Alert, EmptyState, Spinner } from '@/components/common/Feedback';
+import { Alert, Spinner } from '@/components/common/Feedback';
+import { NoTimesMessage } from '@/components/appointments/NoTimesMessage';
 import { TimeGrid } from '@/components/appointments/TimeGrid';
 import { useAvailability } from '@/hooks/useAvailability';
 import { useSession } from '@/context/auth-context';
@@ -94,7 +94,7 @@ export const BookingModal: React.FC<{
       const parties = { clientUserId: client.userId, barberUserId: chosen.barber.userId };
       const id = await appointmentsService.book(input, { status: 'confirmed', ...parties }, actor);
       const created = { ...input, id, status: 'confirmed' } as Appointment;
-      await appointmentEvents.booked(created, parties, actor).catch(() => undefined);
+      await appointmentEvents.booked(created, parties, actor, 'admin').catch(() => undefined);
       reset();
       onBooked();
     } catch (err) {
@@ -176,7 +176,7 @@ export const BookingModal: React.FC<{
           ) : availability.error ? (
             <Alert>{availability.error}</Alert>
           ) : times.length === 0 ? (
-            <EmptyState icon={CalendarX} title="Sin horarios disponibles" description="Prueba otra fecha u otro barbero." />
+            <NoTimesMessage barbers={candidates} />
           ) : (
             <TimeGrid times={times} value={time} onChange={setTime} label="Horarios disponibles" />
           )}

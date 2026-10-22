@@ -14,6 +14,7 @@ import { authErrorMessage, authService } from '@/services/firebase/auth.service'
 import { toUserMessage } from '@/services/firebase/helpers';
 import { hasErrors, validateEmail, validateName, validatePhone, type FieldErrors } from '@/domain/validation';
 import { WEEKDAY_LABELS } from '@/domain/time';
+import { hasWorkingDays } from '@/domain/availability';
 import type { Barber, BarberPrivate } from '@/types/barber.types';
 
 const scheduleSummary = (b: Barber) => {
@@ -199,7 +200,11 @@ export const BarbersPage: React.FC = () => {
                 </div>
                 <ActiveBadge active={b.status === 'active'} />
               </div>
-              <p className="mt-3 text-xs text-subtle">{scheduleSummary(b)}</p>
+              {hasWorkingDays(b.schedule) ? (
+                <p className="mt-3 text-xs text-subtle">{scheduleSummary(b)}</p>
+              ) : (
+                <p className="mt-3 text-xs text-warning">Sin horario configurado: los clientes no verán horas disponibles.</p>
+              )}
               <div className="mt-2">{b.userId ? <Badge tone="accent">Con acceso</Badge> : <Badge tone="warning">Sin cuenta de acceso</Badge>}</div>
               <div className="mt-4 flex flex-wrap gap-1.5 border-t border-line pt-4">
                 <Button size="sm" variant="subtle" onClick={() => setPanel({ kind: 'schedule', barber: b })}>

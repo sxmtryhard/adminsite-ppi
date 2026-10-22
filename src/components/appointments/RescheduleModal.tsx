@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { CalendarX } from 'lucide-react';
 import { Modal } from '@/components/common/Modal';
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
-import { Alert, EmptyState, Spinner } from '@/components/common/Feedback';
+import { Alert, Spinner } from '@/components/common/Feedback';
+import { NoTimesMessage } from '@/components/appointments/NoTimesMessage';
 import { TimeGrid } from './TimeGrid';
 import { useAsync } from '@/hooks/useAsync';
 import { useAvailability } from '@/hooks/useAvailability';
@@ -54,7 +54,7 @@ export const RescheduleModal: React.FC<{
         { role: user.role, cancellationMinHours: settings.cancellationMinHours },
         actor
       );
-      await appointmentEvents.rescheduled(result.appointment, result, actor).catch(() => undefined);
+      await appointmentEvents.rescheduled(result.appointment, result, actor, user.role).catch(() => undefined);
       onDone();
     } catch (err) {
       setError(toUserMessage(err, 'No fue posible reprogramar la cita.'));
@@ -89,7 +89,7 @@ export const RescheduleModal: React.FC<{
         ) : availability.error || barber.error ? (
           <Alert>{availability.error ?? barber.error}</Alert>
         ) : times.length === 0 ? (
-          <EmptyState icon={CalendarX} title="Sin horarios disponibles" description="Prueba con otra fecha." />
+          <NoTimesMessage barbers={barber.data ? [barber.data] : []} />
         ) : (
           <TimeGrid times={times} value={time} onChange={setTime} label="Horarios disponibles" />
         )}
