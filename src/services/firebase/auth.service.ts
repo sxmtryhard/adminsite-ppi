@@ -28,6 +28,10 @@ const AUTH_MESSAGES: Record<string, string> = {
   'auth/weak-password': 'La contraseña es demasiado débil.',
   'auth/network-request-failed': 'Sin conexión. Revisa tu red e inténtalo de nuevo.',
   'auth/requires-recent-login': 'Por seguridad, vuelve a iniciar sesión.',
+  'auth/operation-not-allowed': 'El acceso con correo y contraseña no está habilitado en Firebase.',
+  'auth/invalid-api-key': 'La configuración de Firebase de esta instalación es inválida (variables de entorno).',
+  'auth/api-key-not-valid.-please-pass-a-valid-api-key.': 'La configuración de Firebase de esta instalación es inválida (variables de entorno).',
+  'permission-denied': 'El servidor rechazó la operación. Revisa que las reglas de Firestore estén publicadas.',
 };
 
 export const authErrorMessage = (err: unknown): string => {
@@ -43,7 +47,24 @@ export interface RegisterClientInput {
   password: string;
 }
 
-const verificationSettings = () => ({ url: `${window.location.origin}/login?verificado=1` });
+const CONTINUE_URL_ERRORS = ['auth/unauthorized-continue-uri', 'auth/invalid-continue-uri', 'auth/missing-continue-uri'];
+
+/**
+ * Envía un correo de Firebase con enlace de regreso a la app. Si el dominio actual no está
+ * autorizado en Firebase (p. ej. una URL de Vercel nueva), reintenta sin enlace de regreso
+ * para que el correo se envíe igualmente.
+ */
+const sendWithContinueUrl = async (send: (settings?: { url: string }) => Promise<void>, path: string) => {
+  try {
+    await send({ url: `${window.location.origin}${path}` });
+  } catch (err) {
+    if (err instanceof FirebaseError && CONTINUE_URL_ERRORS.includes(err.code)) {
+      await send(undefined);
+      return;
+    }
+    throw err;
+  }
+};
 
 export const authService = {
   async login(email: string, password: string): Promise<void> {
@@ -81,17 +102,20 @@ export const authService = {
         createdAt: serverTimestamp(),
       });
       await batch.commit();
-      await sendEmailVerification(user, verificationSettings());
     } catch (err) {
       // Sin perfil la cuenta quedaría inutilizable: se elimina para permitir reintentar.
       await user.delete().catch(() => undefined);
       throw err;
     }
+    // La cuenta y el perfil ya existen: si el correo falla, el cliente puede reenviarlo
+    // desde el aviso de verificación del portal, así que no se deshace el registro.
+    await sendWithContinueUrl((s) => sendEmailVerification(user, s), '/login?verificado=1').catch(() => undefined);
   },
 
   async resendVerification(): Promise<void> {
     if (!auth.currentUser) throw new AppError('no-session', 'Inicia sesión de nuevo.');
-    await sendEmailVerification(auth.currentUser, verificationSettings());
+    const current = auth.currentUser;
+    await sendWithContinueUrl((s) => sendEmailVerification(current, s), '/login?verificado=1');
   },
 
   /** Recarga el usuario para conocer si ya verificó el correo; refresca el token para las reglas. */
@@ -106,7 +130,7 @@ export const authService = {
   /** Siempre resuelve igual exista o no la cuenta (evita enumeración). */
   async requestPasswordReset(email: string): Promise<void> {
     try {
-      await sendPasswordResetEmail(auth, email.trim(), { url: `${window.location.origin}/login` });
+      await sendWithContinueUrl((s) => sendPasswordResetEmail(auth, email.trim(), s), '/login');
     } catch (err) {
       if (err instanceof FirebaseError && ['auth/user-not-found', 'auth/invalid-email'].includes(err.code)) return;
       throw err;
@@ -146,7 +170,7 @@ export const authService = {
         await credential.user.delete().catch(() => undefined);
         throw err;
       }
-      await sendPasswordResetEmail(secondaryAuth, input.email.trim(), { url: `${window.location.origin}/login` });
+      await sendWithContinueUrl((s) => sendPasswordResetEmail(secondaryAuth, input.email.trim(), s), '/login');
       await signOut(secondaryAuth);
       return uid;
     } finally {
