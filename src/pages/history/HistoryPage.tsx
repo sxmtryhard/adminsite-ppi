@@ -1,251 +1,312 @@
-import React, { useEffect, useState } from 'react';
-import {
-  History,
-  Calendar,
-  Banknote,
-  CreditCard,
-  Search,
-  User,
-  Download,
-} from 'lucide-react';
-import { Sale } from '@/types/sale.types';
+import React, { useMemo, useState } from 'react';
+import { Download, History, Printer, Search } from 'lucide-react';
+import { PageHeader, Segmented } from '@/components/common/Layout';
+import { Button } from '@/components/common/Button';
+import { Input, Select } from '@/components/common/Input';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+import { Alert, EmptyState, SkeletonRows } from '@/components/common/Feedback';
+import { Badge, StatusBadge } from '@/components/common/StatusBadge';
+import { useAsync } from '@/hooks/useAsync';
+import { useSession } from '@/context/auth-context';
 import { salesService } from '@/services/firebase/sales.service';
+import { appointmentsService } from '@/services/firebase/appointments.service';
+import { barbersService } from '@/services/firebase/barbers.service';
+import { STATUS_LABELS } from '@/domain/appointmentStatus';
+import { businessDate, addDays } from '@/domain/time';
+import { formatCOP, formatDateTime } from '@/lib/format';
+import { exportToCSV } from '@/utils/exportCsv';
+import { PAYMENT_LABELS, type PaymentMethod, type Sale } from '@/types/sale.types';
+import type { AppointmentStatus } from '@/types/appointment.types';
 
 export const HistoryPage: React.FC = () => {
-  const [sales, setSales] = useState<Sale[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [filterMethod, setFilterMethod] = useState<'all' | 'cash' | 'transfer'>('all');
+  const { actor } = useSession();
+  const today = businessDate();
+  const [tab, setTab] = useState<'sales' | 'appointments'>('sales');
+  const [range, setRange] = useState({ from: addDays(today, -29), to: today });
+  const [barberId, setBarberId] = useState('all');
+  const [method, setMethod] = useState<'all' | PaymentMethod>('all');
+  const [saleStatus, setSaleStatus] = useState<'all' | Sale['status']>('all');
+  const [apptStatus, setApptStatus] = useState<'all' | AppointmentStatus>('all');
   const [search, setSearch] = useState('');
+  const [voiding, setVoiding] = useState<Sale | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
-  const loadSales = async () => {
-    setLoading(true);
-    try {
-      const data = await salesService.getSales();
-      setSales(data);
-    } catch (err) {
-      console.error('Error al cargar historial:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const data = useAsync(
+    () =>
+      Promise.all([
+        salesService.listByRange(range.from, range.to),
+        appointmentsService.listByRange(range.from, range.to),
+        barbersService.getBarbers(),
+      ]),
+    [range.from, range.to]
+  );
+  const [sales, appointments, barbers] = data.data ?? [[], [], []];
+  const q = search.trim().toLowerCase();
 
-  useEffect(() => {
-    loadSales();
-  }, []);
+  const filteredSales = useMemo(
+    () =>
+      sales.filter(
+        (s) =>
+          (barberId === 'all' || s.barberId === barberId) &&
+          (method === 'all' || s.paymentMethod === method) &&
+          (saleStatus === 'all' || s.status === saleStatus) &&
+          (!q || s.clientName.toLowerCase().includes(q) || s.items.some((i) => i.name.toLowerCase().includes(q)))
+      ),
+    [sales, barberId, method, saleStatus, q]
+  );
 
-  const formatCOP = (val: number) =>
-    new Intl.NumberFormat('es-CO', {
-      style: 'currency',
-      currency: 'COP',
-      maximumFractionDigits: 0,
-    }).format(val);
+  const filteredAppts = useMemo(
+    () =>
+      [...appointments]
+        .reverse()
+        .filter(
+          (a) =>
+            (barberId === 'all' || a.barberId === barberId) &&
+            (apptStatus === 'all' || a.status === apptStatus) &&
+            (!q || a.clientName.toLowerCase().includes(q) || a.serviceName.toLowerCase().includes(q))
+        ),
+    [appointments, barberId, apptStatus, q]
+  );
 
-  const filteredSales = sales.filter((s) => {
-    const matchesMethod = filterMethod === 'all' || s.paymentMethod === filterMethod;
-    const matchesSearch =
-      (s.barberName && s.barberName.toLowerCase().includes(search.toLowerCase())) ||
-      s.items.some((i) => i.name.toLowerCase().includes(search.toLowerCase()));
-    return matchesMethod && matchesSearch;
-  });
+  const paidTotal = filteredSales.filter((s) => s.status === 'paid').reduce((sum, s) => sum + s.total, 0);
 
-  const totalCollected = filteredSales.reduce((acc, curr) => acc + curr.total, 0);
-
-  const handleExportCSV = () => {
-    if (filteredSales.length === 0) {
-      alert('No hay datos en la tabla para exportar.');
-      return;
-    }
-
-    const headers = ['Fecha y Hora', 'Items Facturados', 'Barbero', 'Metodo de Pago', 'Total COP'];
-    const rows = filteredSales.map((sale) => [
-      sale.createdAt
-        ? `"${new Date(sale.createdAt).toLocaleString('es-CO').replace(/"/g, '""')}"`
-        : '"Reciente"',
-      `"${sale.items.map((i) => `${i.quantity}x ${i.name}`).join(' | ').replace(/"/g, '""')}"`,
-      `"${(sale.barberName || 'Sin asignar').replace(/"/g, '""')}"`,
-      `"${sale.paymentMethod === 'cash' ? 'Efectivo' : 'Transferencia'}"`,
-      sale.total,
-    ]);
-
-    const csvContent = '\uFEFF' + [headers.join(';'), ...rows.map((r) => r.join(';'))].join('\r\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute(
-      'download',
-      `arqueo_caja_${new Date().toISOString().slice(0, 10)}.csv`
-    );
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const exportCurrent = () => {
+    const ok =
+      tab === 'sales'
+        ? exportToCSV(
+            'ventas',
+            filteredSales.map((s) => ({
+              fecha: formatDateTime(s.createdAt),
+              items: s.items.map((i) => `${i.quantity}x ${i.name}`).join(' | '),
+              cliente: s.clientName,
+              barbero: s.barberName,
+              metodo: PAYMENT_LABELS[s.paymentMethod],
+              subtotal: s.subtotal,
+              descuento: s.discount,
+              total: s.total,
+              estado: s.status === 'paid' ? 'Pagada' : 'Anulada',
+            })),
+            [
+              { key: 'fecha', label: 'Fecha' },
+              { key: 'items', label: 'Ítems' },
+              { key: 'cliente', label: 'Cliente' },
+              { key: 'barbero', label: 'Barbero' },
+              { key: 'metodo', label: 'Método de pago' },
+              { key: 'subtotal', label: 'Subtotal' },
+              { key: 'descuento', label: 'Descuento' },
+              { key: 'total', label: 'Total' },
+              { key: 'estado', label: 'Estado' },
+            ]
+          )
+        : exportToCSV(
+            'citas',
+            filteredAppts.map((a) => ({
+              fecha: a.date,
+              hora: a.time,
+              cliente: a.clientName,
+              servicio: a.serviceName,
+              barbero: a.barberName,
+              precio: a.servicePrice,
+              estado: STATUS_LABELS[a.status],
+            })),
+            [
+              { key: 'fecha', label: 'Fecha' },
+              { key: 'hora', label: 'Hora' },
+              { key: 'cliente', label: 'Cliente' },
+              { key: 'servicio', label: 'Servicio' },
+              { key: 'barbero', label: 'Barbero' },
+              { key: 'precio', label: 'Precio' },
+              { key: 'estado', label: 'Estado' },
+            ]
+          );
+    setNotice(ok ? null : 'No hay datos para exportar con los filtros actuales.');
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-neutral-100">Historial de Caja</h1>
-          <p className="text-xs text-neutral-400">Registro de todas las transacciones cobradas en mostrador</p>
+    <>
+      <PageHeader
+        title="Historial"
+        description="Ventas, pagos y citas de todo el negocio, con filtros y exportación."
+        actions={
+          <>
+            <Button variant="outline" onClick={() => window.print()}>
+              <Printer className="h-4 w-4" aria-hidden /> PDF
+            </Button>
+            <Button variant="outline" onClick={exportCurrent}>
+              <Download className="h-4 w-4" aria-hidden /> Excel (CSV)
+            </Button>
+          </>
+        }
+      />
+
+      <div className="card space-y-3 p-4 no-print">
+        <Segmented
+          label="Tipo de historial"
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: 'sales', label: 'Ventas y pagos' },
+            { value: 'appointments', label: 'Citas' },
+          ]}
+        />
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+          <Input label="Desde" type="date" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })} />
+          <Input label="Hasta" type="date" min={range.from} value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} />
+          <Select label="Barbero" value={barberId} onChange={(e) => setBarberId(e.target.value)}>
+            <option value="all">Todos</option>
+            {barbers.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.fullName}
+              </option>
+            ))}
+          </Select>
+          {tab === 'sales' ? (
+            <>
+              <Select label="Método" value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
+                <option value="all">Todos</option>
+                {Object.entries(PAYMENT_LABELS).map(([v, l]) => (
+                  <option key={v} value={v}>
+                    {l}
+                  </option>
+                ))}
+              </Select>
+              <Select label="Estado" value={saleStatus} onChange={(e) => setSaleStatus(e.target.value as typeof saleStatus)}>
+                <option value="all">Todas</option>
+                <option value="paid">Pagadas</option>
+                <option value="voided">Anuladas</option>
+              </Select>
+            </>
+          ) : (
+            <Select label="Estado" value={apptStatus} onChange={(e) => setApptStatus(e.target.value as typeof apptStatus)}>
+              <option value="all">Todos</option>
+              {Object.entries(STATUS_LABELS).map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </Select>
+          )}
+          <Input label="Buscar" placeholder="Cliente, servicio o producto" icon={<Search className="h-4 w-4" />} value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={handleExportCSV}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-neutral-800 bg-neutral-900 text-neutral-200 hover:bg-neutral-800 transition-colors cursor-pointer"
-          >
-            <Download className="h-3.5 w-3.5" />
-            Exportar CSV
-          </button>
-          <div className="text-right border-l border-neutral-800 pl-3">
-            <p className="text-xs text-neutral-400">Total filtrado</p>
-            <p className="text-lg font-bold font-mono text-emerald-400">{formatCOP(totalCollected)}</p>
+      </div>
+
+      {data.error && <Alert>{data.error}</Alert>}
+      {notice && <Alert tone="info">{notice}</Alert>}
+
+      <div className="card overflow-hidden">
+        {data.loading ? (
+          <SkeletonRows />
+        ) : tab === 'sales' ? (
+          filteredSales.length === 0 ? (
+            <EmptyState icon={History} title="Sin ventas para estos filtros" />
+          ) : (
+            <>
+              <div className="flex justify-between border-b border-line px-5 py-3 text-sm">
+                <span className="text-muted">{filteredSales.length} ventas</span>
+                <span className="text-muted">
+                  Cobrado: <strong className="text-ink">{formatCOP(paidTotal)}</strong>
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="table-base min-w-[860px]">
+                  <thead>
+                    <tr>
+                      <th>Fecha</th>
+                      <th>Detalle</th>
+                      <th>Cliente / Barbero</th>
+                      <th>Método</th>
+                      <th className="text-right">Total</th>
+                      <th>Estado</th>
+                      <th className="no-print" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredSales.map((s) => (
+                      <tr key={s.id}>
+                        <td className="whitespace-nowrap text-xs">{formatDateTime(s.createdAt)}</td>
+                        <td className="text-xs">
+                          {s.items.map((i) => `${i.quantity}× ${i.name}`).join(', ')}
+                          {s.appointmentId && <span className="block text-subtle">Cobro de cita</span>}
+                        </td>
+                        <td className="text-xs">
+                          {s.clientName || 'Ocasional'}
+                          <span className="block text-subtle">{s.barberName || '—'}</span>
+                        </td>
+                        <td className="text-xs">{PAYMENT_LABELS[s.paymentMethod]}</td>
+                        <td className="text-right font-medium tabular-nums">
+                          {formatCOP(s.total)}
+                          {s.discount > 0 && <span className="block text-xs font-normal text-subtle">desc. {formatCOP(s.discount)}</span>}
+                        </td>
+                        <td>
+                          {s.status === 'paid' ? <Badge tone="success">Pagada</Badge> : <Badge tone="danger">Anulada</Badge>}
+                          {s.voidReason && <span className="block text-xs text-subtle">{s.voidReason}</span>}
+                        </td>
+                        <td className="no-print text-right">
+                          {s.status === 'paid' && (
+                            <Button size="sm" variant="ghost" className="text-danger" onClick={() => setVoiding(s)}>
+                              Anular
+                            </Button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )
+        ) : filteredAppts.length === 0 ? (
+          <EmptyState icon={History} title="Sin citas para estos filtros" />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="table-base min-w-[760px]">
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Cliente</th>
+                  <th>Servicio</th>
+                  <th>Barbero</th>
+                  <th>Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredAppts.map((a) => (
+                  <tr key={a.id}>
+                    <td className="whitespace-nowrap">
+                      {a.date} <span className="text-subtle">{a.time}</span>
+                    </td>
+                    <td>{a.clientName}</td>
+                    <td>
+                      {a.serviceName}
+                      <span className="block text-xs text-subtle">{formatCOP(a.servicePrice)}</span>
+                    </td>
+                    <td>{a.barberName}</td>
+                    <td>
+                      <StatusBadge status={a.status} />
+                      {a.cancelReason && <span className="block text-xs text-subtle">{a.cancelReason}</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        </div>
+        )}
       </div>
 
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-        <div className="relative w-full sm:w-80">
-          <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-neutral-500" />
-          <input
-            type="text"
-            placeholder="Buscar por barbero o producto/servicio..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full h-9 pl-8 pr-3 rounded-md bg-neutral-900/50 border border-neutral-800 text-xs text-neutral-200 placeholder:text-neutral-500 focus:outline-none focus:border-neutral-400"
-          />
-        </div>
-
-        <div className="flex gap-1.5 self-start sm:self-auto">
-          <button
-            type="button"
-            onClick={() => setFilterMethod('all')}
-            className={`px-3 py-1.5 rounded-md text-xs font-medium border transition-colors cursor-pointer ${
-              filterMethod === 'all'
-                ? 'bg-neutral-800 border-neutral-700 text-neutral-100'
-                : 'border-neutral-800 text-neutral-400 hover:bg-neutral-900'
-            }`}
-          >
-            Todos
-          </button>
-          <button
-            type="button"
-            onClick={() => setFilterMethod('cash')}
-            className={`px-3 py-1.5 rounded-md text-xs font-medium border flex items-center gap-1.5 transition-colors cursor-pointer ${
-              filterMethod === 'cash'
-                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                : 'border-neutral-800 text-neutral-400 hover:bg-neutral-900'
-            }`}
-          >
-            <Banknote className="h-3.5 w-3.5" />
-            Efectivo
-          </button>
-          <button
-            type="button"
-            onClick={() => setFilterMethod('transfer')}
-            className={`px-3 py-1.5 rounded-md text-xs font-medium border flex items-center gap-1.5 transition-colors cursor-pointer ${
-              filterMethod === 'transfer'
-                ? 'bg-blue-500/10 border-blue-500/30 text-blue-400'
-                : 'border-neutral-800 text-neutral-400 hover:bg-neutral-900'
-            }`}
-          >
-            <CreditCard className="h-3.5 w-3.5" />
-            Transferencia
-          </button>
-        </div>
-      </div>
-
-      <div className="rounded-lg border border-neutral-800 bg-neutral-950 overflow-hidden">
-        <table className="w-full text-left text-xs">
-          <thead className="border-b border-neutral-800 bg-neutral-900/40 text-neutral-400 font-medium">
-            <tr>
-              <th className="py-3 px-4">Fecha y Hora</th>
-              <th className="py-3 px-4">Detalle de Ítems</th>
-              <th className="py-3 px-4">Barbero</th>
-              <th className="py-3 px-4">Método</th>
-              <th className="py-3 px-4 text-right">Monto Total</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-neutral-800/40">
-            {loading ? (
-              Array.from({ length: 4 }).map((_, i) => (
-                <tr key={i} className="animate-pulse">
-                  <td className="py-3.5 px-4"><div className="h-3.5 w-24 bg-neutral-800 rounded" /></td>
-                  <td className="py-3.5 px-4"><div className="h-3.5 w-40 bg-neutral-800 rounded" /></td>
-                  <td className="py-3.5 px-4"><div className="h-3.5 w-20 bg-neutral-800 rounded" /></td>
-                  <td className="py-3.5 px-4"><div className="h-3.5 w-16 bg-neutral-800 rounded" /></td>
-                  <td className="py-3.5 px-4 text-right"><div className="h-3.5 w-16 bg-neutral-800 rounded ml-auto" /></td>
-                </tr>
-              ))
-            ) : filteredSales.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="py-12 text-center text-neutral-500 space-y-2">
-                  <History className="h-8 w-8 mx-auto stroke-[1.25] text-neutral-600" />
-                  <p>No se registran transacciones con los filtros seleccionados.</p>
-                </td>
-              </tr>
-            ) : (
-              filteredSales.map((sale) => (
-                <tr key={sale.id} className="hover:bg-neutral-900/30 transition-colors">
-                  <td className="py-3 px-4 font-mono text-neutral-400">
-                    <div className="flex items-center gap-1.5">
-                      <Calendar className="h-3.5 w-3.5 text-neutral-500" />
-                      <span>
-                        {sale.createdAt
-                          ? new Date(sale.createdAt).toLocaleString('es-CO', {
-                              dateStyle: 'short',
-                              timeStyle: 'short',
-                            })
-                          : 'Reciente'}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="py-3 px-4">
-                    <div className="space-y-0.5">
-                      {sale.items.map((it, idx) => (
-                        <div key={idx} className="text-neutral-300">
-                          <span className="font-mono text-neutral-500 mr-1.5">{it.quantity}x</span>
-                          <span>{it.name}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </td>
-                  <td className="py-3 px-4 text-neutral-300">
-                    {sale.barberName ? (
-                      <div className="flex items-center gap-1.5">
-                        <User className="h-3.5 w-3.5 text-neutral-500" />
-                        <span>{sale.barberName}</span>
-                      </div>
-                    ) : (
-                      <span className="text-neutral-600 italic">No especificado</span>
-                    )}
-                  </td>
-                  <td className="py-3 px-4">
-                    <span
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono capitalize border ${
-                        sale.paymentMethod === 'cash'
-                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                          : 'bg-blue-500/10 text-blue-400 border-blue-500/20'
-                      }`}
-                    >
-                      {sale.paymentMethod === 'cash' ? (
-                        <Banknote className="h-3 w-3" />
-                      ) : (
-                        <CreditCard className="h-3 w-3" />
-                      )}
-                      {sale.paymentMethod === 'cash' ? 'Efectivo' : 'Transferencia'}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 text-right font-mono font-semibold text-neutral-100">
-                    {formatCOP(sale.total)}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
+      <ConfirmDialog
+        isOpen={voiding !== null}
+        title="Anular venta"
+        message={`La venta de ${voiding ? formatCOP(voiding.total) : ''} dejará de contar como ingreso, se devolverán las existencias de productos y, si era el cobro de una cita, la cita quedará pendiente de cobro.`}
+        confirmLabel="Anular venta"
+        reasonLabel="Motivo (devolución, error de digitación…)"
+        onCancel={() => setVoiding(null)}
+        onConfirm={async (reason) => {
+          if (!voiding) return;
+          await salesService.voidSale(voiding.id, reason, actor);
+          setVoiding(null);
+          data.reload();
+        }}
+      />
+    </>
   );
 };

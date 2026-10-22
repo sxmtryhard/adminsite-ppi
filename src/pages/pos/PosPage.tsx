@@ -1,325 +1,336 @@
-import React, { useEffect, useState } from 'react';
-import { ShoppingCart, Plus, Minus, Trash2, CreditCard, Banknote, ArrowRight, AlertCircle } from 'lucide-react';
-import { Product } from '@/types/product.types';
-import { ServiceItem } from '@/types/service.types';
-import { SaleItem, PaymentMethod } from '@/types/sale.types';
+import React, { useMemo, useState } from 'react';
+import { ArrowRight, Banknote, CreditCard, Landmark, Minus, Plus, Receipt, Search, ShoppingCart, Trash2 } from 'lucide-react';
+import { PageHeader, Segmented } from '@/components/common/Layout';
+import { Button } from '@/components/common/Button';
+import { Input, Select } from '@/components/common/Input';
+import { Alert, EmptyState, Spinner } from '@/components/common/Feedback';
+import { useAsync } from '@/hooks/useAsync';
+import { useSession } from '@/context/auth-context';
 import { productsService } from '@/services/firebase/products.service';
 import { servicesService } from '@/services/firebase/services.service';
-import { salesService } from '@/services/firebase/sales.service';
-import { Button } from '@/components/common/Button';
+import { barbersService } from '@/services/firebase/barbers.service';
+import { clientsService } from '@/services/firebase/clients.service';
+import { appointmentsService } from '@/services/firebase/appointments.service';
+import { MAX_SALE_LINES, salesService } from '@/services/firebase/sales.service';
+import { toUserMessage } from '@/services/firebase/helpers';
+import { addDays, businessDate } from '@/domain/time';
+import { formatCOP } from '@/lib/format';
+import { cn } from '@/lib/utils';
+import type { Appointment } from '@/types/appointment.types';
+import type { PaymentMethod, SaleItem } from '@/types/sale.types';
+
+const METHODS: { value: PaymentMethod; label: string; icon: typeof Banknote }[] = [
+  { value: 'cash', label: 'Efectivo', icon: Banknote },
+  { value: 'transfer', label: 'Transferencia', icon: Landmark },
+  { value: 'card', label: 'Datáfono', icon: CreditCard },
+];
 
 export const PosPage: React.FC = () => {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [services, setServices] = useState<ServiceItem[]>([]);
-  const [cart, setCart] = useState<SaleItem[]>([]);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
-  const [barberName, setBarberName] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [successMsg, setSuccessMsg] = useState(false);
-
-  const loadCatalog = async () => {
-    setLoading(true);
-    setFetchError(null);
-    try {
-      const [prodsRes, svcsRes] = await Promise.allSettled([
-        productsService.getProducts(),
+  const { actor } = useSession();
+  const today = businessDate();
+  const catalog = useAsync(
+    () =>
+      Promise.all([
         servicesService.getServices(),
-      ]);
+        productsService.getProducts(),
+        barbersService.getBarbers(),
+        clientsService.getClients(),
+        appointmentsService.listByRange(addDays(today, -14), today),
+      ]),
+    [today]
+  );
+  const [services, products, barbers, clients, recent] = catalog.data ?? [[], [], [], [], []];
+  const pendingCharges = recent.filter((a) => a.status === 'completed' && !a.saleId);
 
-      if (prodsRes.status === 'fulfilled') {
-        setProducts(prodsRes.value);
-      } else {
-        console.error('Error cargando productos:', prodsRes.reason);
-      }
+  const [tab, setTab] = useState<'service' | 'product'>('service');
+  const [search, setSearch] = useState('');
+  const [cart, setCart] = useState<SaleItem[]>([]);
+  const [discount, setDiscount] = useState('');
+  const [method, setMethod] = useState<PaymentMethod>('cash');
+  const [barberId, setBarberId] = useState('');
+  const [clientId, setClientId] = useState('');
+  const [appointment, setAppointment] = useState<Appointment | null>(null);
+  // Id de la venta en curso: se mantiene entre reintentos para que un doble clic no duplique el cobro.
+  const [saleId, setSaleId] = useState(() => salesService.newSaleId());
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
-      if (svcsRes.status === 'fulfilled') {
-        setServices(svcsRes.value);
-      } else {
-        console.error('Error cargando servicios:', svcsRes.reason);
-      }
+  const stockOf = (id: string) => products.find((p) => p.id === id)?.stock ?? 0;
 
-      if (prodsRes.status === 'rejected' && svcsRes.status === 'rejected') {
-        setFetchError('No se pudo conectar con Firestore. Revisa la conexión de red o bloqueos del navegador.');
-      }
-    } catch (err: unknown) {
-      setFetchError(err instanceof Error ? err.message : 'Error inesperado al cargar catálogo.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadCatalog();
-  }, []);
-
-  const addToCart = (id: string, type: 'product' | 'service', name: string, price: number) => {
+  const addItem = (refId: string, type: SaleItem['type'], name: string, unitPrice: number) => {
+    setSuccess(null);
     setCart((prev) => {
-      const existing = prev.find((i) => i.id === id);
+      const existing = prev.find((i) => i.refId === refId && i.type === type);
       if (existing) {
-        return prev.map((i) =>
-          i.id === id
-            ? { ...i, quantity: i.quantity + 1, subtotal: (i.quantity + 1) * i.price }
-            : i
-        );
+        if (type === 'product' && existing.quantity >= stockOf(refId)) return prev;
+        return prev.map((i) => (i === existing ? { ...i, quantity: i.quantity + 1, subtotal: (i.quantity + 1) * i.unitPrice } : i));
       }
-      return [...prev, { id, type, name, price, quantity: 1, subtotal: price }];
+      if (prev.length >= MAX_SALE_LINES) return prev;
+      return [...prev, { refId, type, name, unitPrice, quantity: 1, subtotal: unitPrice }];
     });
   };
 
-  const updateQuantity = (id: string, delta: number) => {
+  const changeQty = (item: SaleItem, delta: number) => {
     setCart((prev) =>
       prev
         .map((i) => {
-          if (i.id === id) {
-            const nextQty = i.quantity + delta;
-            return { ...i, quantity: nextQty, subtotal: nextQty * i.price };
-          }
-          return i;
+          if (i !== item) return i;
+          const max = i.type === 'product' ? stockOf(i.refId) : 20;
+          const quantity = Math.min(Math.max(i.quantity + delta, 0), max);
+          return { ...i, quantity, subtotal: quantity * i.unitPrice };
         })
         .filter((i) => i.quantity > 0)
     );
   };
 
-  const removeItem = (id: string) => {
-    setCart((prev) => prev.filter((i) => i.id !== id));
+  const subtotal = cart.reduce((s, i) => s + i.subtotal, 0);
+  const discountValue = discount.trim() === '' ? 0 : Number(discount);
+  const discountError =
+    !Number.isInteger(discountValue) || discountValue < 0 || discountValue > subtotal ? 'Descuento inválido (entero, entre 0 y el subtotal).' : null;
+  const total = subtotal - (discountError ? 0 : discountValue);
+
+  const chargeAppointment = (a: Appointment) => {
+    setAppointment(a);
+    setCart([{ refId: a.serviceId, type: 'service', name: a.serviceName, unitPrice: a.servicePrice, quantity: 1, subtotal: a.servicePrice }]);
+    setBarberId(a.barberId);
+    setClientId(a.clientId);
+    setSuccess(null);
+    setError(null);
   };
 
-  const total = cart.reduce((sum, item) => sum + item.subtotal, 0);
+  const resetSale = () => {
+    setCart([]);
+    setDiscount('');
+    setAppointment(null);
+    setClientId('');
+    setSaleId(salesService.newSaleId());
+  };
 
-  const handleCheckout = async () => {
-    if (cart.length === 0) return;
+  const checkout = async () => {
+    if (cart.length === 0 || discountError) return;
+    const hasService = cart.some((i) => i.type === 'service');
+    if (hasService && !barberId) {
+      setError('Selecciona el barbero que realizó el servicio (se usa para su desempeño y comisiones).');
+      return;
+    }
+    const barber = barbers.find((b) => b.id === barberId);
+    const client = clients.find((c) => c.id === clientId);
     setSubmitting(true);
+    setError(null);
     try {
-      await salesService.createSale({
-        items: cart,
-        total,
-        paymentMethod,
-        barberName: barberName.trim() || undefined,
-      });
-
-      setCart([]);
-      setSuccessMsg(true);
-      setTimeout(() => setSuccessMsg(false), 3000);
-      await loadCatalog();
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : 'Error al procesar la venta');
+      await salesService.createSale(
+        saleId,
+        {
+          items: cart,
+          discount: discountValue,
+          paymentMethod: method,
+          barberId: barber?.id ?? null,
+          barberName: barber?.fullName ?? '',
+          clientId: client?.id ?? appointment?.clientId ?? null,
+          clientName: client?.fullName ?? appointment?.clientName ?? '',
+          appointmentId: appointment?.id ?? null,
+        },
+        actor
+      );
+      setSuccess(`Venta registrada por ${formatCOP(total)}.`);
+      resetSale();
+      catalog.reload();
+    } catch (err) {
+      setError(toUserMessage(err, 'No fue posible registrar la venta.'));
     } finally {
       setSubmitting(false);
     }
   };
 
-  const formatCOP = (val: number) =>
-    new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(val);
+  const q = search.trim().toLowerCase();
+  const list = useMemo(
+    () =>
+      tab === 'service'
+        ? services.filter((s) => s.status === 'active' && s.name.toLowerCase().includes(q)).map((s) => ({ id: s.id, name: s.name, price: s.price, stock: null as number | null }))
+        : products.filter((p) => p.active && p.name.toLowerCase().includes(q)).map((p) => ({ id: p.id, name: p.name, price: p.salePrice, stock: p.stock })),
+    [tab, services, products, q]
+  );
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-neutral-100">Caja y Punto de Venta (POS)</h1>
-          <p className="text-xs text-neutral-400">Facturación de mostrador para productos y servicios</p>
-        </div>
-        <Button variant="outline" size="sm" onClick={loadCatalog} isLoading={loading}>
-          Recargar Catálogo
-        </Button>
-      </div>
+    <>
+      <PageHeader title="Caja y punto de venta" description="Cobro de servicios y productos. Cada venta descuenta inventario de forma atómica." />
+      {catalog.error && <Alert>{catalog.error}</Alert>}
+      {success && <Alert tone="success">{success}</Alert>}
 
-      {fetchError && (
-        <div className="p-3 rounded-md bg-red-500/10 border border-red-500/20 text-xs text-red-400 flex items-center gap-2">
-          <AlertCircle className="h-4 w-4 shrink-0" />
-          <span>{fetchError}</span>
-        </div>
-      )}
-
-      {successMsg && (
-        <div className="p-3 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-400">
-          Venta registrada con éxito y stock actualizado.
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          {/* Servicios */}
-          <div className="space-y-3">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-neutral-400">Servicios</h2>
-            {loading ? (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                {Array.from({ length: 3 }).map((_, i) => (
-                  <div key={i} className="h-16 rounded-lg bg-neutral-900/40 border border-neutral-800 animate-pulse" />
+      <div className="grid gap-6 lg:grid-cols-[1fr_380px]">
+        <div className="space-y-6">
+          {pendingCharges.length > 0 && (
+            <section className="card p-5">
+              <h2 className="mb-3 text-sm font-semibold text-ink">Citas completadas por cobrar</h2>
+              <ul className="space-y-2">
+                {pendingCharges.map((a) => (
+                  <li key={a.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line px-3 py-2 text-sm">
+                    <span>
+                      <span className="font-medium text-ink">{a.clientName}</span> · {a.serviceName} · {a.barberName}
+                      <span className="block text-xs text-subtle">
+                        {a.date} {a.time}
+                      </span>
+                    </span>
+                    <Button size="sm" variant={appointment?.id === a.id ? 'default' : 'subtle'} onClick={() => chargeAppointment(a)}>
+                      Cobrar {formatCOP(a.servicePrice)}
+                    </Button>
+                  </li>
                 ))}
+              </ul>
+            </section>
+          )}
+
+          <section className="card p-5">
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+              <Segmented
+                label="Tipo de ítem"
+                value={tab}
+                onChange={setTab}
+                options={[
+                  { value: 'service', label: 'Servicios' },
+                  { value: 'product', label: 'Productos' },
+                ]}
+              />
+              <div className="sm:ml-auto sm:w-64">
+                <Input aria-label="Buscar en el catálogo" placeholder="Buscar…" icon={<Search className="h-4 w-4" />} value={search} onChange={(e) => setSearch(e.target.value)} />
               </div>
-            ) : services.length === 0 ? (
-              <div className="p-4 rounded-lg border border-neutral-800/60 bg-neutral-950 text-xs text-neutral-500">
-                No hay servicios cargados.
-              </div>
+            </div>
+            {catalog.loading ? (
+              <Spinner />
+            ) : list.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted">No hay ítems activos.</p>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                {services.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => addToCart(s.id, 'service', s.name, s.price)}
-                    className="p-3 text-left rounded-lg border border-neutral-800 bg-neutral-950 hover:border-neutral-700 hover:bg-neutral-900/40 transition-colors cursor-pointer"
-                  >
-                    <p className="text-xs font-medium text-neutral-200 line-clamp-1">{s.name}</p>
-                    <p className="text-xs font-mono font-semibold text-neutral-100 mt-1">{formatCOP(s.price)}</p>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Productos en Stock */}
-          <div className="space-y-3">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-neutral-400">Productos en Stock</h2>
-            {loading ? (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                {Array.from({ length: 3 }).map((_, i) => (
-                  <div key={i} className="h-16 rounded-lg bg-neutral-900/40 border border-neutral-800 animate-pulse" />
-                ))}
-              </div>
-            ) : products.length === 0 ? (
-              <div className="p-4 rounded-lg border border-neutral-800/60 bg-neutral-950 text-xs text-neutral-500">
-                No hay productos cargados en inventario.
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                {products.map((p) => {
-                  const outOfStock = p.stock <= 0;
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {list.map((item) => {
+                  const out = item.stock !== null && item.stock <= 0;
                   return (
                     <button
-                      key={p.id}
+                      key={item.id}
                       type="button"
-                      disabled={outOfStock}
-                      onClick={() => addToCart(p.id, 'product', p.name, p.salePrice)}
-                      className="p-3 text-left rounded-lg border border-neutral-800 bg-neutral-950 hover:border-neutral-700 hover:bg-neutral-900/40 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                      disabled={out || appointment !== null}
+                      onClick={() => addItem(item.id, tab, item.name, item.price)}
+                      className="rounded-2xl border border-line bg-surface-2 p-3 text-left transition hover:border-accent/60 disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                      <p className="text-xs font-medium text-neutral-200 line-clamp-1">{p.name}</p>
-                      <div className="flex items-center justify-between mt-1">
-                        <p className="text-xs font-mono font-semibold text-neutral-100">{formatCOP(p.salePrice)}</p>
-                        <span className="text-[10px] font-mono text-neutral-500">Disp: {p.stock}</span>
+                      <p className="line-clamp-2 text-sm font-medium text-ink">{item.name}</p>
+                      <div className="mt-1 flex items-center justify-between">
+                        <span className="text-sm font-semibold text-ink">{formatCOP(item.price)}</span>
+                        {item.stock !== null && <span className="text-xs text-subtle">Disp. {item.stock}</span>}
                       </div>
                     </button>
                   );
                 })}
               </div>
             )}
-          </div>
+            {appointment && <p className="mt-3 text-xs text-muted">Estás cobrando una cita: finaliza o limpia el ticket para agregar otros ítems.</p>}
+          </section>
         </div>
 
-        {/* Ticket de Caja / Carrito */}
-        <div className="border border-neutral-800 bg-neutral-950 rounded-xl p-5 flex flex-col justify-between space-y-4 h-fit">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between border-b border-neutral-800/80 pb-3">
-              <div className="flex items-center gap-2">
-                <ShoppingCart className="h-4 w-4 text-neutral-400" />
-                <h3 className="text-sm font-semibold text-neutral-100">Ticket de Venta</h3>
-              </div>
-              <span className="text-xs font-mono text-neutral-500">{cart.length} items</span>
-            </div>
+        <aside className="card flex h-fit flex-col p-5 lg:sticky lg:top-0" aria-label="Ticket de venta">
+          <div className="mb-3 flex items-center justify-between border-b border-line pb-3">
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-ink">
+              <ShoppingCart className="h-4 w-4 text-muted" aria-hidden /> Ticket
+            </h2>
+            {cart.length > 0 && (
+              <button className="text-xs text-muted hover:text-danger" onClick={resetSale}>
+                Limpiar
+              </button>
+            )}
+          </div>
 
-            {cart.length === 0 ? (
-              <p className="text-xs text-neutral-500 py-6 text-center">Selecciona un producto o servicio para facturar</p>
-            ) : (
-              <div className="space-y-2.5 max-h-64 overflow-y-auto pr-1">
-                {cart.map((item) => (
-                  <div key={item.id} className="flex items-center justify-between text-xs py-1.5 border-b border-neutral-900">
-                    <div className="flex-1 pr-2">
-                      <p className="text-neutral-200 font-medium line-clamp-1">{item.name}</p>
-                      <p className="text-[11px] font-mono text-neutral-500">{formatCOP(item.price)} c/u</p>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => updateQuantity(item.id, -1)}
-                        className="p-1 rounded bg-neutral-900 text-neutral-400 hover:text-neutral-200 cursor-pointer"
-                      >
+          {cart.length === 0 ? (
+            <EmptyState icon={Receipt} title="Ticket vacío" description="Agrega servicios o productos, o cobra una cita completada." />
+          ) : (
+            <ul className="max-h-72 space-y-2 overflow-y-auto">
+              {cart.map((item) => (
+                <li key={`${item.type}-${item.refId}`} className="flex items-center gap-2 border-b border-line/60 pb-2 text-sm">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium text-ink">{item.name}</p>
+                    <p className="text-xs text-subtle">{formatCOP(item.unitPrice)} c/u</p>
+                  </div>
+                  {!appointment && (
+                    <div className="flex items-center gap-1">
+                      <button className="rounded-full bg-surface-2 p-1 text-muted hover:text-ink" onClick={() => changeQty(item, -1)} aria-label={`Quitar una unidad de ${item.name}`}>
                         <Minus className="h-3 w-3" />
                       </button>
-                      <span className="font-mono text-neutral-200 px-1">{item.quantity}</span>
-                      <button
-                        type="button"
-                        onClick={() => updateQuantity(item.id, 1)}
-                        className="p-1 rounded bg-neutral-900 text-neutral-400 hover:text-neutral-200 cursor-pointer"
-                      >
+                      <span className="w-6 text-center tabular-nums">{item.quantity}</span>
+                      <button className="rounded-full bg-surface-2 p-1 text-muted hover:text-ink" onClick={() => changeQty(item, 1)} aria-label={`Agregar una unidad de ${item.name}`}>
                         <Plus className="h-3 w-3" />
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => removeItem(item.id)}
-                        className="p-1 text-neutral-500 hover:text-red-400 ml-1 cursor-pointer"
-                      >
+                      <button className="p-1 text-subtle hover:text-danger" onClick={() => changeQty(item, -item.quantity)} aria-label={`Eliminar ${item.name}`}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     </div>
-                  </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="mt-4 space-y-3 border-t border-line pt-4">
+            <Select label="Barbero que atendió" value={barberId} onChange={(e) => setBarberId(e.target.value)} disabled={appointment !== null}>
+              <option value="">— Sin barbero (solo productos) —</option>
+              {barbers.filter((b) => b.status === 'active' || b.id === barberId).map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.fullName}
+                </option>
+              ))}
+            </Select>
+            <Select label="Cliente (opcional)" value={clientId} onChange={(e) => setClientId(e.target.value)} disabled={appointment !== null}>
+              <option value="">— Cliente ocasional —</option>
+              {clients.filter((c) => c.status === 'active' || c.id === clientId).map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.fullName}
+                </option>
+              ))}
+            </Select>
+            <Input label="Descuento (COP)" type="number" min={0} step={500} value={discount} onChange={(e) => setDiscount(e.target.value)} error={cart.length ? discountError ?? undefined : undefined} />
+            <div>
+              <p className="field-label">Método de pago</p>
+              <div role="radiogroup" aria-label="Método de pago" className="grid grid-cols-3 gap-2">
+                {METHODS.map(({ value, label, icon: Icon }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="radio"
+                    aria-checked={method === value}
+                    onClick={() => setMethod(value)}
+                    className={cn(
+                      'flex flex-col items-center gap-1 rounded-xl border py-2 text-xs transition',
+                      method === value ? 'border-accent bg-accent/15 text-ink' : 'border-line text-muted hover:text-ink'
+                    )}
+                  >
+                    <Icon className="h-4 w-4" aria-hidden />
+                    {label}
+                  </button>
                 ))}
               </div>
+              <p className="mt-1 text-[11px] text-subtle">Se registra el medio usado; no se procesan pagos con tarjeta en la app.</p>
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-1 border-t border-line pt-4 text-sm">
+            <div className="flex justify-between text-muted">
+              <span>Subtotal</span>
+              <span className="tabular-nums">{formatCOP(subtotal)}</span>
+            </div>
+            {discountValue > 0 && !discountError && (
+              <div className="flex justify-between text-muted">
+                <span>Descuento</span>
+                <span className="tabular-nums">−{formatCOP(discountValue)}</span>
+              </div>
             )}
-
-            <div className="space-y-3 pt-3 border-t border-neutral-800/80 text-xs">
-              <div>
-                <label className="text-neutral-400 block mb-1.5">Método de Pago</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setPaymentMethod('cash')}
-                    className={`flex items-center justify-center gap-1.5 p-2 rounded-md border text-xs cursor-pointer ${
-                      paymentMethod === 'cash'
-                        ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-400'
-                        : 'border-neutral-800 text-neutral-400 hover:bg-neutral-900'
-                    }`}
-                  >
-                    <Banknote className="h-3.5 w-3.5" />
-                    Efectivo
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPaymentMethod('transfer')}
-                    className={`flex items-center justify-center gap-1.5 p-2 rounded-md border text-xs cursor-pointer ${
-                      paymentMethod === 'transfer'
-                        ? 'border-blue-500/50 bg-blue-500/10 text-blue-400'
-                        : 'border-neutral-800 text-neutral-400 hover:bg-neutral-900'
-                    }`}
-                  >
-                    <CreditCard className="h-3.5 w-3.5" />
-                    Transferencia
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-neutral-400 block mb-1">Barbero asignado (Opcional)</label>
-                <input
-                  type="text"
-                  placeholder="Nombre del barbero"
-                  value={barberName}
-                  onChange={(e) => setBarberName(e.target.value)}
-                  className="w-full h-8 px-2.5 rounded-md bg-neutral-900/50 border border-neutral-800 text-xs text-neutral-200 placeholder:text-neutral-600 focus:outline-none focus:border-neutral-500"
-                />
-              </div>
+            <div className="flex justify-between pt-1 text-base font-semibold text-ink">
+              <span>Total</span>
+              <span className="tabular-nums">{formatCOP(total)}</span>
             </div>
           </div>
-
-          <div className="pt-4 border-t border-neutral-800/80 space-y-3">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-neutral-400">Total a Pagar</span>
-              <span className="font-mono font-bold text-neutral-100 text-base">{formatCOP(total)}</span>
-            </div>
-
-            <Button
-              className="w-full flex items-center justify-center gap-2"
-              disabled={cart.length === 0 || submitting}
-              isLoading={submitting}
-              onClick={handleCheckout}
-            >
-              Completar Cobro
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
+          {error && <Alert className="mt-3">{error}</Alert>}
+          <Button className="mt-4 w-full" size="lg" onClick={checkout} isLoading={submitting} disabled={cart.length === 0 || Boolean(discountError)}>
+            Registrar cobro <ArrowRight className="h-4 w-4" aria-hidden />
+          </Button>
+        </aside>
       </div>
-    </div>
+    </>
   );
 };

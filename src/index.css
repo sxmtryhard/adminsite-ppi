@@ -2,124 +2,111 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Identidad XAC Barber Studio: grafito profundo con acento índigo. */
 :root {
   color-scheme: dark;
+  --bg: 11 12 16;
+  --surface: 20 23 32;
+  --surface-2: 26 29 38;
+  --line: 32 36 48;
+  --ink: 241 245 249;
+  --muted: 148 163 184;
+  --subtle: 100 116 139;
+  --accent: 99 102 241;
+  --accent-strong: 79 70 229;
+  --success: 52 211 153;
+  --warning: 251 191 36;
+  --danger: 248 113 113;
+  --info: 96 165 250;
 }
 
-/* 1. Fondo base: grafito moderno de software real (cero blanco sucio) */
-body {
-  background-color: #0b0c10 !important;
-  color: #f1f5f9 !important;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  -webkit-font-smoothing: antialiased;
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-bg text-ink antialiased;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-feature-settings: 'tnum' 1, 'cv11' 1;
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--accent));
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
 }
 
-/* 2. Barra lateral (Sidebar) */
-aside,
-[class*="sidebar"] {
-  background-color: #111318 !important;
-  border-right: 1px solid #1c1f26 !important;
+@layer components {
+  .card {
+    @apply rounded-2xl border border-line bg-surface shadow-[0_10px_25px_-12px_rgba(0,0,0,0.5)];
+  }
+
+  .field {
+    @apply w-full h-10 rounded-xl border border-line bg-surface-2 px-3 text-sm text-ink placeholder:text-subtle transition-colors focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30 disabled:opacity-50;
+  }
+
+  .field-label {
+    @apply block text-xs font-medium text-muted mb-1.5;
+  }
+
+  .table-base {
+    @apply w-full text-left text-sm;
+  }
+  .table-base th {
+    @apply px-4 py-3 text-xs font-medium uppercase tracking-wide text-muted border-b border-line whitespace-nowrap;
+  }
+  .table-base td {
+    @apply px-4 py-3 border-b border-line/60 text-ink/90 align-top;
+  }
+  .table-base tbody tr {
+    @apply transition-colors hover:bg-surface-2/60;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium whitespace-nowrap;
+  }
+
+  .skeleton {
+    @apply animate-pulse rounded-md bg-surface-2;
+  }
 }
 
-/* Ítem activo del menú (Dashboard, Clientes, etc.) */
-aside a[class*="active"],
-aside button[class*="active"],
-nav a[class*="active"],
-[aria-current="page"] {
-  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
-  color: #ffffff !important;
-  border-radius: 9999px !important;
-  font-weight: 600 !important;
-  box-shadow: 0 4px 14px rgba(79, 70, 229, 0.35) !important;
-}
-
-/* 3. Header y buscador superior */
-header {
-  background-color: #0b0c10 !important;
-  border-bottom: 1px solid #1c1f26 !important;
-}
-
-header input,
-input[type="text"],
-input[type="search"] {
-  background-color: #161820 !important;
-  border: 1px solid #282c37 !important;
-  border-radius: 9999px !important;
-  color: #ffffff !important;
-  padding: 0.5rem 1.2rem !important;
-}
-
-/* 4. Tarjetas y Paneles (Métricas y Próximos Turnos) */
-.bg-white,
-.bg-black,
-.bg-zinc-950,
-.bg-zinc-900,
-.bg-slate-900,
-[class*="bg-card"],
-[class*="bg-muted"],
-.card,
-main .grid > div,
-main > div > div:last-child {
-  background-color: #141720 !important;
-  border: 1px solid #202430 !important;
-  border-radius: 1.25rem !important;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.45) !important;
-}
-
-/* 5. Todos los textos y números grandes: legibilidad 100% garantizada */
-h1, h2, h3, h4,
-main .grid div,
-main .grid span,
-main .grid p {
-  color: #f8fafc !important;
-}
-
-/* Textos secundarios */
-main .grid p:last-child,
-.text-muted,
-[class*="text-slate-400"],
-[class*="text-zinc-400"],
-[class*="text-gray-400"] {
-  color: #94a3b8 !important;
-}
-
-/* 6. Botones de acción principales (+ Nueva Cita, + Nuevo Cliente) */
-header button,
-button:not([class*="ghost"]):not([class*="danger"]):not([class*="destructive"]):not([class*="text-"]):not([aria-label*="close"]):not([aria-label*="Close"]),
-.bg-primary {
-  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
-  color: #ffffff !important;
-  border-radius: 9999px !important;
-  font-weight: 600 !important;
-  border: none !important;
-  padding: 0.5rem 1.25rem !important;
-  box-shadow: 0 4px 14px rgba(79, 70, 229, 0.3) !important;
-}
-
-/* 7. Tablas sin bordes rotos */
-table {
-  background: transparent !important;
-  border-collapse: separate !important;
-  border-spacing: 0 !important;
-}
-
-th {
-  background: transparent !important;
-  color: #94a3b8 !important;
-  border-bottom: 1px solid #202430 !important;
-}
-
-td {
-  border-bottom: 1px solid #1a1d26 !important;
-  color: #e2e8f0 !important;
-}
-
-/* 8. Insignias de Estado */
-[class*="COMPLETADA"],
-[class*="ACTIVO"] {
-  background-color: rgba(99, 102, 241, 0.15) !important;
-  color: #a5b4fc !important;
-  border: 1px solid rgba(99, 102, 241, 0.3) !important;
-  border-radius: 9999px !important;
-  padding: 0.2rem 0.65rem !important;
+/* Exportación a PDF mediante el diálogo de impresión del navegador. */
+@media print {
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+  aside,
+  header,
+  .no-print {
+    display: none !important;
+  }
+  main {
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+  .card {
+    border-color: #ccc !important;
+    background: #fff !important;
+    box-shadow: none !important;
+    break-inside: avoid;
+  }
+  .text-ink,
+  .text-muted,
+  .text-subtle {
+    color: #000 !important;
+  }
 }

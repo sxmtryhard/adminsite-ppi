@@ -1,155 +1,126 @@
 import React, { useState } from 'react';
-import { useAuth } from '@/context/AuthContext';
-import { Building2, User, Clock, ShieldCheck, LogOut, Check } from 'lucide-react';
+import { Building2, CalendarClock } from 'lucide-react';
+import { Card, PageHeader } from '@/components/common/Layout';
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
-import { BusinessSettings } from '@/types/settings.types';
+import { Alert, Spinner } from '@/components/common/Feedback';
+import { useSession } from '@/context/auth-context';
+import { useSettings } from '@/hooks/useSettings';
+import { settingsService } from '@/services/firebase/settings.service';
+import { toUserMessage } from '@/services/firebase/helpers';
+import { cleanText } from '@/domain/validation';
+import type { BusinessSettings } from '@/types/settings.types';
+
+const intIn = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
 
 export const SettingsPage: React.FC = () => {
-  const { user, logout } = useAuth();
-  const [saved, setSaved] = useState(false);
+  const { actor } = useSession();
+  const { settings, saved, loading, error, reload } = useSettings();
+  const [draft, setDraft] = useState<BusinessSettings | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
+  const form = draft ?? settings;
 
-  const [settings, setSettings] = useState<BusinessSettings>({
-    studioName: 'XAC Barber Studio',
-    phone: '+57 300 000 0000',
-    address: 'Medellín, Antioquia',
-    openingHour: '08:00',
-    closingHour: '20:00',
-    slotIntervalMinutes: 45,
-  });
+  const set = <K extends keyof BusinessSettings>(key: K, value: BusinessSettings[K]) => setDraft({ ...form, [key]: value });
 
-  const handleSave = (e: React.FormEvent) => {
+  const save = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+    if (
+      !intIn(form.cancellationMinHours, 0, 72) ||
+      !intIn(form.minLeadMinutes, 0, 1440) ||
+      !intIn(form.bookingWindowDays, 1, 180) ||
+      !intIn(form.defaultMinStock, 0, 1000)
+    ) {
+      setMessage({ tone: 'error', text: 'Revisa los valores: deben ser enteros dentro de los rangos indicados.' });
+      return;
+    }
+    setSaving(true);
+    setMessage(null);
+    try {
+      await settingsService.save(
+        { ...form, studioName: cleanText(form.studioName, 80), phone: cleanText(form.phone, 20), address: cleanText(form.address, 120) },
+        actor
+      );
+      setDraft(null);
+      reload();
+      setMessage({ tone: 'success', text: 'Configuración guardada.' });
+    } catch (err) {
+      setMessage({ tone: 'error', text: toUserMessage(err, 'No fue posible guardar.') });
+    } finally {
+      setSaving(false);
+    }
   };
 
+  if (loading) return <Spinner />;
+
   return (
-    <div className="space-y-6 max-w-4xl">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight text-neutral-100">Configuración</h1>
-        <p className="text-xs text-neutral-400">Administra los datos de la barbería y tu cuenta de acceso</p>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Perfil del Administrador */}
-        <div className="md:col-span-1 border border-neutral-800 bg-neutral-950 rounded-xl p-5 space-y-4 h-fit">
-          <div className="flex items-center gap-2 text-neutral-200 text-sm font-semibold">
-            <User className="h-4 w-4 text-neutral-400" />
-            <span>Cuenta de Acceso</span>
-          </div>
-
-          <div className="space-y-3 pt-2 text-xs">
-            <div>
-              <p className="text-neutral-500">Correo Electrónico</p>
-              <p className="font-mono text-neutral-200 mt-0.5 break-all">{user?.email || 'admin@xacstudio.com'}</p>
-            </div>
-
-            <div>
-              <p className="text-neutral-500">Rol asignado</p>
-              <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded text-[11px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                <ShieldCheck className="h-3 w-3" />
-                {user?.role?.toUpperCase() || 'ADMINISTRADOR'}
-              </span>
+    <>
+      <PageHeader title="Configuración del negocio" description="Datos del estudio y políticas de reserva. Los cambios quedan en la auditoría." />
+      {error && <Alert>{error}</Alert>}
+      {!saved && (
+        <Alert tone="warning">
+          Se muestran valores sugeridos que aún no han sido aprobados ni guardados. Revísalos con el propietario y guárdalos para aplicarlos.
+        </Alert>
+      )}
+      <form onSubmit={save} className="space-y-6">
+        <Card title="Datos del estudio" icon={Building2}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Input label="Nombre del negocio" value={form.studioName} onChange={(e) => set('studioName', e.target.value)} required />
+            <Input label="Teléfono de contacto" value={form.phone} onChange={(e) => set('phone', e.target.value)} />
+            <Input label="Dirección" value={form.address} onChange={(e) => set('address', e.target.value)} />
+            <div className="grid grid-cols-2 gap-4">
+              <Input label="Moneda" value="COP (peso colombiano)" disabled />
+              <Input label="Zona horaria" value="America/Bogota" disabled />
             </div>
           </div>
+        </Card>
 
-          <div className="pt-4 border-t border-neutral-800/80">
-            <Button
-              variant="danger"
-              size="sm"
-              className="w-full flex items-center justify-center gap-1.5"
-              onClick={logout}
-            >
-              <LogOut className="h-3.5 w-3.5" />
-              Cerrar Sesión
-            </Button>
-          </div>
-        </div>
-
-        {/* Ajustes del Estudio */}
-        <div className="md:col-span-2 border border-neutral-800 bg-neutral-950 rounded-xl p-5 space-y-5">
-          <div className="flex items-center gap-2 text-neutral-200 text-sm font-semibold border-b border-neutral-800/60 pb-3">
-            <Building2 className="h-4 w-4 text-neutral-400" />
-            <span>Parámetros de XAC Barber Studio</span>
-          </div>
-
-          {saved && (
-            <div className="p-3 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-400 flex items-center gap-2">
-              <Check className="h-4 w-4" />
-              Configuración actualizada correctamente.
-            </div>
-          )}
-
-          <form onSubmit={handleSave} className="space-y-4">
+        <Card title="Políticas de reserva" icon={CalendarClock} description="Las jornadas y descansos se configuran por barbero.">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Input
-              label="Nombre del Negocio"
-              value={settings.studioName}
-              onChange={(e) => setSettings({ ...settings, studioName: e.target.value })}
-              required
+              label="Antelación para cancelar/reprogramar (h)"
+              type="number"
+              min={0}
+              max={72}
+              value={form.cancellationMinHours}
+              onChange={(e) => set('cancellationMinHours', Number(e.target.value))}
+              hint="Aplica a clientes. 0–72."
             />
+            <Input
+              label="Antelación mínima para reservar (min)"
+              type="number"
+              min={0}
+              max={1440}
+              step={15}
+              value={form.minLeadMinutes}
+              onChange={(e) => set('minLeadMinutes', Number(e.target.value))}
+            />
+            <Input
+              label="Ventana de reservas (días)"
+              type="number"
+              min={1}
+              max={180}
+              value={form.bookingWindowDays}
+              onChange={(e) => set('bookingWindowDays', Number(e.target.value))}
+            />
+            <Input
+              label="Mínimo de existencias por defecto"
+              type="number"
+              min={0}
+              value={form.defaultMinStock}
+              onChange={(e) => set('defaultMinStock', Number(e.target.value))}
+            />
+          </div>
+          <p className="mt-3 text-xs text-subtle">La agenda trabaja en bloques fijos de 15 minutos y servicios de hasta 120 minutos.</p>
+        </Card>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Input
-                label="Teléfono de Contacto"
-                value={settings.phone}
-                onChange={(e) => setSettings({ ...settings, phone: e.target.value })}
-                required
-              />
-
-              <Input
-                label="Ubicación / Dirección"
-                value={settings.address}
-                onChange={(e) => setSettings({ ...settings, address: e.target.value })}
-                required
-              />
-            </div>
-
-            <div className="pt-2">
-              <div className="flex items-center gap-2 text-xs font-semibold text-neutral-300 mb-3">
-                <Clock className="h-3.5 w-3.5 text-neutral-400" />
-                <span>Horarios de Atención y Bloques de Citas</span>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <Input
-                  label="Hora de Apertura"
-                  type="time"
-                  value={settings.openingHour}
-                  onChange={(e) => setSettings({ ...settings, openingHour: e.target.value })}
-                  required
-                />
-
-                <Input
-                  label="Hora de Cierre"
-                  type="time"
-                  value={settings.closingHour}
-                  onChange={(e) => setSettings({ ...settings, closingHour: e.target.value })}
-                  required
-                />
-
-                <Input
-                  label="Intervalo sugerido (min)"
-                  type="number"
-                  min="15"
-                  step="15"
-                  value={settings.slotIntervalMinutes}
-                  onChange={(e) =>
-                    setSettings({ ...settings, slotIntervalMinutes: Number(e.target.value) })
-                  }
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="pt-3 border-t border-neutral-800/60 flex justify-end">
-              <Button type="submit" size="sm">
-                Guardar Parámetros
-              </Button>
-            </div>
-          </form>
+        {message && <Alert tone={message.tone}>{message.text}</Alert>}
+        <div className="flex justify-end">
+          <Button type="submit" isLoading={saving}>
+            Guardar configuración
+          </Button>
         </div>
-      </div>
-    </div>
+      </form>
+    </>
   );
 };

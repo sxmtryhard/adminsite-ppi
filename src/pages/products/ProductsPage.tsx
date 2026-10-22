@@ -1,310 +1,359 @@
-import React, { useEffect, useState } from 'react';
-import { Plus, Package, AlertTriangle, Trash2, Search } from 'lucide-react';
-import { Product, CreateProductDTO } from '@/types/product.types';
-import { productsService } from '@/services/firebase/products.service';
+import React, { useMemo, useState } from 'react';
+import { AlertTriangle, ArrowDownUp, History, Package, PackagePlus, Pencil, Plus, Search } from 'lucide-react';
+import { PageHeader } from '@/components/common/Layout';
 import { Button } from '@/components/common/Button';
-import { Input } from '@/components/common/Input';
+import { Input, Select, Textarea } from '@/components/common/Input';
 import { Modal } from '@/components/common/Modal';
+import { Alert, EmptyState, SkeletonRows, Spinner } from '@/components/common/Feedback';
+import { ActiveBadge, Badge } from '@/components/common/StatusBadge';
+import { useAsync } from '@/hooks/useAsync';
+import { useSession } from '@/context/auth-context';
+import { useSettings } from '@/hooks/useSettings';
+import { productsService } from '@/services/firebase/products.service';
+import { toUserMessage } from '@/services/firebase/helpers';
+import { marginPct } from '@/domain/finance';
+import { hasErrors, validateMoney, validateName, validateQuantity, type FieldErrors } from '@/domain/validation';
+import { formatCOP, formatDateTime, formatPct } from '@/lib/format';
+import { MOVEMENT_LABELS, PRODUCT_CATEGORY_LABELS, type Product, type ProductCategory } from '@/types/product.types';
+
+type Panel =
+  | { kind: 'new' }
+  | { kind: 'edit'; product: Product }
+  | { kind: 'purchase' | 'adjust'; product: Product }
+  | { kind: 'movements'; product: Product | null }
+  | null;
+
+const Movements: React.FC<{ product: Product | null }> = ({ product }) => {
+  const list = useAsync(() => productsService.getMovements(product?.id), [product?.id]);
+  if (list.loading) return <Spinner />;
+  if (list.error) return <Alert>{list.error}</Alert>;
+  if (!list.data?.length) return <p className="py-6 text-center text-sm text-muted">Sin movimientos registrados.</p>;
+  return (
+    <div className="max-h-[60vh] overflow-auto">
+      <table className="table-base">
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            {!product && <th>Producto</th>}
+            <th>Tipo</th>
+            <th className="text-right">Cant.</th>
+            <th className="text-right">Saldo</th>
+            <th>Detalle</th>
+          </tr>
+        </thead>
+        <tbody>
+          {list.data.map((m) => (
+            <tr key={m.id}>
+              <td className="whitespace-nowrap text-xs">{formatDateTime(m.createdAt)}</td>
+              {!product && <td>{m.productName}</td>}
+              <td className="text-xs">{MOVEMENT_LABELS[m.type]}</td>
+              <td className={`text-right font-medium tabular-nums ${m.quantity > 0 ? 'text-success' : 'text-danger'}`}>
+                {m.quantity > 0 ? `+${m.quantity}` : m.quantity}
+              </td>
+              <td className="text-right tabular-nums">{m.stockAfter}</td>
+              <td className="text-xs text-muted">
+                {m.reason}
+                {m.unitCost !== null && m.type === 'purchase' && ` · ${formatCOP(m.unitCost)} c/u`}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
 
 export const ProductsPage: React.FC = () => {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { actor } = useSession();
+  const { settings } = useSettings();
+  const data = useAsync(() => Promise.all([productsService.getProducts(), productsService.getCosts()]), []);
+  const [products, costs] = data.data ?? [[], new Map<string, number | null>()];
+  const [panel, setPanel] = useState<Panel>(null);
   const [search, setSearch] = useState('');
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  const [onlyLow, setOnlyLow] = useState(false);
+  const [form, setForm] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [operationId, setOperationId] = useState('');
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [formData, setFormData] = useState<CreateProductDTO>({
-    name: '',
-    description: '',
-    category: 'cuidado_capilar',
-    costPrice: 0,
-    salePrice: 0,
-    stock: 10,
-    minStock: 3,
-  });
-
-  const loadProducts = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await productsService.getProducts();
-      setProducts(data);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Error inesperado.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadProducts();
-  }, []);
-
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSubmitting(true);
-    try {
-      await productsService.createProduct(formData);
-      setIsModalOpen(false);
-      setFormData({
-        name: '',
-        description: '',
-        category: 'cuidado_capilar',
-        costPrice: 0,
-        salePrice: 0,
-        stock: 10,
-        minStock: 3,
-      });
-      await loadProducts();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Error al guardar el producto.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleAdjustStock = async (id: string, delta: number) => {
-    try {
-      await productsService.updateStock(id, delta);
-      setProducts((prev) =>
-        prev.map((p) => (p.id === id ? { ...p, stock: Math.max(0, p.stock + delta) } : p))
-      );
-    } catch {
-      alert('No se pudo ajustar el stock');
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('¿Seguro que deseas eliminar este producto?')) return;
-    try {
-      await productsService.deleteProduct(id);
-      setProducts((prev) => prev.filter((p) => p.id !== id));
-    } catch {
-      alert('Error al eliminar');
-    }
-  };
-
-  const formatCOP = (val: number) =>
-    new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(val);
-
-  const filtered = products.filter((p) =>
-    p.name.toLowerCase().includes(search.toLowerCase())
+  const lowStock = products.filter((p) => p.active && p.stock <= p.minStock);
+  const filtered = useMemo(
+    () =>
+      products.filter(
+        (p) => p.name.toLowerCase().includes(search.trim().toLowerCase()) && (!onlyLow || (p.active && p.stock <= p.minStock))
+      ),
+    [products, search, onlyLow]
   );
 
+  const open = (next: Panel) => {
+    setPanel(next);
+    setErrors({});
+    setError(null);
+    setOperationId(crypto.randomUUID());
+    if (next?.kind === 'new') {
+      setForm({ name: '', description: '', category: 'cuidado_capilar', salePrice: '', minStock: String(settings.defaultMinStock), initialStock: '0', unitCost: '' });
+    } else if (next?.kind === 'edit') {
+      const p = next.product;
+      setForm({ name: p.name, description: p.description, category: p.category, salePrice: String(p.salePrice), minStock: String(p.minStock) });
+    } else if (next?.kind === 'purchase' || next?.kind === 'adjust') {
+      setForm({ quantity: '', unitCost: '', reason: '' });
+    }
+  };
+
+  const run = async (fn: () => Promise<void>) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await fn();
+      setPanel(null);
+      data.reload();
+    } catch (err) {
+      setError(toUserMessage(err, 'No fue posible guardar.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const submitProduct = (e: React.FormEvent) => {
+    e.preventDefault();
+    const salePrice = Number(form.salePrice);
+    const minStock = Number(form.minStock);
+    const next: FieldErrors = {
+      name: validateName(form.name),
+      salePrice: validateMoney(salePrice, { allowZero: false }),
+      minStock: Number.isInteger(minStock) && minStock >= 0 ? undefined : 'Valor inválido.',
+    };
+    if (panel?.kind === 'new') {
+      const initial = Number(form.initialStock);
+      next.initialStock = Number.isInteger(initial) && initial >= 0 ? undefined : 'Valor inválido.';
+      if (initial > 0) next.unitCost = validateMoney(Number(form.unitCost));
+    }
+    setErrors(next);
+    if (hasErrors(next) || !panel) return;
+    const base = { name: form.name, description: form.description, category: form.category as ProductCategory, salePrice, minStock };
+    if (panel.kind === 'new') {
+      const initialStock = Number(form.initialStock);
+      void run(() =>
+        productsService
+          .createProduct({ ...base, initialStock, unitCost: initialStock > 0 ? Number(form.unitCost) : null }, actor)
+          .then(() => undefined)
+      );
+    } else if (panel.kind === 'edit') {
+      void run(() => productsService.updateProduct(panel.product, base, actor));
+    }
+  };
+
+  const submitMovement = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (panel?.kind !== 'purchase' && panel?.kind !== 'adjust') return;
+    const quantity = Number(form.quantity);
+    const next: FieldErrors = {};
+    if (panel.kind === 'purchase') {
+      next.quantity = validateQuantity(quantity);
+      next.unitCost = validateMoney(Number(form.unitCost));
+    } else {
+      next.quantity = Number.isInteger(quantity) && quantity !== 0 ? undefined : 'Usa un entero distinto de cero (negativo para salidas).';
+      next.reason = form.reason.trim().length >= 3 ? undefined : 'Indica el motivo del ajuste.';
+    }
+    setErrors(next);
+    if (hasErrors(next)) return;
+    void run(() =>
+      productsService.recordMovement(
+        {
+          productId: panel.product.id,
+          type: panel.kind === 'purchase' ? 'purchase' : 'adjustment',
+          quantity,
+          unitCost: panel.kind === 'purchase' ? Number(form.unitCost) : null,
+          reason: panel.kind === 'purchase' ? form.reason || 'Compra a proveedor' : form.reason,
+          operationId,
+        },
+        actor
+      )
+    );
+  };
+
+  const field = (key: string) => ({
+    value: form[key] ?? '',
+    error: errors[key],
+    onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => setForm({ ...form, [key]: e.target.value }),
+  });
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-neutral-100">Inventario y Productos</h1>
-          <p className="text-xs text-neutral-400">Control de stock y precios de venta en mostrador</p>
-        </div>
-        <Button onClick={() => setIsModalOpen(true)} size="sm">
-          <Plus className="h-4 w-4 mr-1.5" />
-          Nuevo Producto
-        </Button>
-      </div>
+    <>
+      <PageHeader
+        title="Inventario y productos"
+        description="Existencias, costo promedio, entradas, ajustes e historial de movimientos."
+        actions={
+          <>
+            <Button variant="outline" onClick={() => open({ kind: 'movements', product: null })}>
+              <History className="h-4 w-4" aria-hidden /> Movimientos
+            </Button>
+            <Button onClick={() => open({ kind: 'new' })}>
+              <Plus className="h-4 w-4" aria-hidden /> Nuevo producto
+            </Button>
+          </>
+        }
+      />
 
-      <div className="flex items-center justify-between gap-4">
-        <div className="relative w-80">
-          <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-neutral-500" />
-          <input
-            type="text"
-            placeholder="Buscar producto..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full h-9 pl-8 pr-3 rounded-md bg-neutral-900/50 border border-neutral-800 text-xs text-neutral-200 placeholder:text-neutral-500 focus:outline-none focus:border-neutral-400"
-          />
-        </div>
-        <span className="text-xs text-neutral-500 font-mono">
-          {filtered.length} referencias
-        </span>
-      </div>
-
-      {error && (
-        <div className="p-3 rounded-md bg-red-500/10 border border-red-500/20 text-xs text-red-400">
-          {error}
-        </div>
+      {lowStock.length > 0 && (
+        <Alert tone="warning">
+          {lowStock.length} producto(s) con existencias bajas: {lowStock.map((p) => `${p.name} (${p.stock})`).join(', ')}.
+        </Alert>
       )}
+      {(data.error || (error && !panel)) && <Alert>{data.error ?? error}</Alert>}
 
-      <div className="rounded-lg border border-neutral-800 bg-neutral-950 overflow-hidden">
-        <table className="w-full text-left text-xs">
-          <thead className="border-b border-neutral-800 bg-neutral-900/40 text-neutral-400 font-medium">
-            <tr>
-              <th className="py-3 px-4">Producto</th>
-              <th className="py-3 px-4">Categoría</th>
-              <th className="py-3 px-4 font-mono">Costo</th>
-              <th className="py-3 px-4 font-mono">P. Venta</th>
-              <th className="py-3 px-4">Margen</th>
-              <th className="py-3 px-4 text-center">Stock</th>
-              <th className="py-3 px-4 text-right">Acciones</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-neutral-800/40">
-            {loading ? (
-              Array.from({ length: 3 }).map((_, i) => (
-                <tr key={i} className="animate-pulse">
-                  <td className="py-3 px-4"><div className="h-3.5 w-32 bg-neutral-800 rounded" /></td>
-                  <td className="py-3 px-4"><div className="h-3.5 w-20 bg-neutral-800 rounded" /></td>
-                  <td className="py-3 px-4"><div className="h-3.5 w-16 bg-neutral-800 rounded" /></td>
-                  <td className="py-3 px-4"><div className="h-3.5 w-16 bg-neutral-800 rounded" /></td>
-                  <td className="py-3 px-4"><div className="h-3.5 w-12 bg-neutral-800 rounded" /></td>
-                  <td className="py-3 px-4 text-center"><div className="h-3.5 w-10 bg-neutral-800 rounded mx-auto" /></td>
-                  <td className="py-3 px-4 text-right"><div className="h-3.5 w-8 bg-neutral-800 rounded ml-auto" /></td>
-                </tr>
-              ))
-            ) : filtered.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="py-12 text-center text-neutral-500 space-y-2">
-                  <Package className="h-8 w-8 mx-auto stroke-[1.25] text-neutral-600" />
-                  <p>No hay productos registrados en inventario.</p>
-                </td>
-              </tr>
-            ) : (
-              filtered.map((item) => {
-                const isLowStock = item.stock <= item.minStock;
-                const profit = item.salePrice - item.costPrice;
-                return (
-                  <tr key={item.id} className="hover:bg-neutral-900/30 transition-colors">
-                    <td className="py-3 px-4">
-                      <div className="font-medium text-neutral-200">{item.name}</div>
-                      {item.description && (
-                        <div className="text-[11px] text-neutral-500">{item.description}</div>
-                      )}
-                    </td>
-                    <td className="py-3 px-4 text-neutral-400 capitalize">
-                      {item.category.replace('_', ' ')}
-                    </td>
-                    <td className="py-3 px-4 font-mono text-neutral-400">{formatCOP(item.costPrice)}</td>
-                    <td className="py-3 px-4 font-mono font-medium text-neutral-200">{formatCOP(item.salePrice)}</td>
-                    <td className="py-3 px-4 font-mono text-emerald-400">+{formatCOP(profit)}</td>
-                    <td className="py-3 px-4 text-center">
-                      <div className="inline-flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleAdjustStock(item.id, -1)}
-                          className="h-6 w-6 rounded bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 flex items-center justify-center font-mono text-neutral-300"
-                        >
-                          -
-                        </button>
-                        <span className={`font-mono font-semibold px-2 py-0.5 rounded text-xs ${
-                          isLowStock ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'text-neutral-200'
-                        }`}>
-                          {item.stock}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => handleAdjustStock(item.id, 1)}
-                          className="h-6 w-6 rounded bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 flex items-center justify-center font-mono text-neutral-300"
-                        >
-                          +
-                        </button>
-                        {isLowStock && (
-                          <span title="Stock bajo" className="flex items-center">
-                            <AlertTriangle className="h-3.5 w-3.5 text-amber-400 ml-1" />
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 text-right">
-                      <button
-                        type="button"
-                        onClick={() => handleDelete(item.id)}
-                        className="p-1 text-neutral-500 hover:text-red-400 transition-colors"
-                        title="Eliminar producto"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="w-full max-w-sm">
+          <Input aria-label="Buscar producto" placeholder="Buscar producto…" icon={<Search className="h-4 w-4" />} value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+        <label className="flex items-center gap-2 text-sm text-muted">
+          <input type="checkbox" className="h-4 w-4 accent-[rgb(var(--accent))]" checked={onlyLow} onChange={(e) => setOnlyLow(e.target.checked)} />
+          Solo existencias bajas
+        </label>
       </div>
 
-      <Modal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        title="Nuevo Producto"
-        description="Ingresa los datos para registrar un nuevo artículo en inventario."
-      >
-        <form onSubmit={handleCreate} className="space-y-4 pt-1">
-          <Input
-            label="Nombre del Producto *"
-            placeholder="Ej. Cera Mate Fijación Fuerte 100g"
-            required
-            value={formData.name}
-            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-          />
-
-          <div className="space-y-1.5 text-left">
-            <label className="text-xs font-medium text-neutral-400">Categoría</label>
-            <select
-              value={formData.category}
-              onChange={(e) =>
-                setFormData({
-                  ...formData,
-                  category: e.target.value as 'cuidado_capilar' | 'barba' | 'accesorios' | 'otros',
-                })
-              }
-              className="w-full h-9 rounded-md border border-neutral-800 bg-neutral-900/50 px-3 text-xs text-neutral-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400"
-            >
-              <option value="cuidado_capilar">Cuidado Capilar</option>
-              <option value="barba">Cuidado de Barba</option>
-              <option value="accesorios">Accesorios y Cuchillas</option>
-              <option value="otros">Otros</option>
-            </select>
+      <div className="card overflow-hidden">
+        {data.loading ? (
+          <SkeletonRows />
+        ) : filtered.length === 0 ? (
+          <EmptyState icon={Package} title="Sin productos" description="Registra productos con su costo para calcular el costo de lo vendido." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="table-base min-w-[900px]">
+              <thead>
+                <tr>
+                  <th>Producto</th>
+                  <th>Costo prom.</th>
+                  <th>Precio</th>
+                  <th>Margen</th>
+                  <th className="text-center">Existencias</th>
+                  <th>Estado</th>
+                  <th className="text-right">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((p) => {
+                  const cost = costs.get(p.id) ?? null;
+                  const low = p.active && p.stock <= p.minStock;
+                  return (
+                    <tr key={p.id}>
+                      <td>
+                        <p className="font-medium">{p.name}</p>
+                        <p className="text-xs text-subtle">{PRODUCT_CATEGORY_LABELS[p.category] ?? p.category}</p>
+                      </td>
+                      <td>{cost === null ? <Badge tone="warning">Sin costo</Badge> : formatCOP(cost)}</td>
+                      <td className="font-medium">{formatCOP(p.salePrice)}</td>
+                      <td>{cost === null ? '—' : formatPct(marginPct(p.salePrice - cost, p.salePrice))}</td>
+                      <td className="text-center">
+                        <span className={`inline-flex items-center gap-1 font-semibold tabular-nums ${low ? 'text-warning' : ''}`}>
+                          {low && <AlertTriangle className="h-3.5 w-3.5" aria-label="Existencias bajas" />}
+                          {p.stock}
+                        </span>
+                        <span className="block text-xs text-subtle">mín. {p.minStock}</span>
+                      </td>
+                      <td>
+                        <ActiveBadge active={p.active} />
+                      </td>
+                      <td>
+                        <div className="flex justify-end gap-1">
+                          <Button size="sm" variant="subtle" onClick={() => open({ kind: 'purchase', product: p })}>
+                            <PackagePlus className="h-3.5 w-3.5" aria-hidden /> Entrada
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => open({ kind: 'adjust', product: p })} aria-label={`Ajustar ${p.name}`}>
+                            <ArrowDownUp className="h-3.5 w-3.5" aria-hidden />
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => open({ kind: 'movements', product: p })} aria-label={`Movimientos de ${p.name}`}>
+                            <History className="h-3.5 w-3.5" aria-hidden />
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => open({ kind: 'edit', product: p })} aria-label={`Editar ${p.name}`}>
+                            <Pencil className="h-3.5 w-3.5" aria-hidden />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => run(() => productsService.setActive(p, !p.active, actor))}
+                          >
+                            {p.active ? 'Desactivar' : 'Activar'}
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
+        )}
+      </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <Input
-              label="Precio Costo (COP) *"
-              type="number"
-              required
-              min="0"
-              value={formData.costPrice || ''}
-              onChange={(e) => setFormData({ ...formData, costPrice: Number(e.target.value) })}
-            />
-            <Input
-              label="Precio Venta (COP) *"
-              type="number"
-              required
-              min="0"
-              value={formData.salePrice || ''}
-              onChange={(e) => setFormData({ ...formData, salePrice: Number(e.target.value) })}
-            />
+      <Modal isOpen={panel?.kind === 'new' || panel?.kind === 'edit'} onClose={() => setPanel(null)} title={panel?.kind === 'new' ? 'Nuevo producto' : 'Editar producto'}>
+        <form onSubmit={submitProduct} className="space-y-4" noValidate>
+          <Input label="Nombre *" {...field('name')} />
+          <Textarea label="Descripción (visible en el catálogo)" maxLength={300} {...field('description')} />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Select label="Categoría" {...field('category')}>
+              {Object.entries(PRODUCT_CATEGORY_LABELS).map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </Select>
+            <Input label="Precio de venta (COP) *" type="number" min={0} step={500} {...field('salePrice')} />
+            <Input label="Alerta de existencias bajas" type="number" min={0} {...field('minStock')} />
+            {panel?.kind === 'new' && (
+              <>
+                <Input label="Existencias iniciales" type="number" min={0} {...field('initialStock')} />
+                <Input label="Costo unitario de compra (COP)" type="number" min={0} step={100} hint="Requerido si hay existencias iniciales." {...field('unitCost')} />
+              </>
+            )}
           </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <Input
-              label="Stock Inicial *"
-              type="number"
-              required
-              min="0"
-              value={formData.stock || ''}
-              onChange={(e) => setFormData({ ...formData, stock: Number(e.target.value) })}
-            />
-            <Input
-              label="Stock Mínimo (Alerta)"
-              type="number"
-              min="1"
-              value={formData.minStock || ''}
-              onChange={(e) => setFormData({ ...formData, minStock: Number(e.target.value) })}
-            />
-          </div>
-
-          <div className="flex justify-end gap-2 pt-3 border-t border-neutral-800/40">
-            <Button type="button" variant="ghost" size="sm" onClick={() => setIsModalOpen(false)}>
+          {panel?.kind === 'edit' && <p className="text-xs text-subtle">Las existencias y el costo se modifican con “Entrada” o “Ajuste” para conservar el historial.</p>}
+          {error && <Alert>{error}</Alert>}
+          <div className="flex justify-end gap-2 border-t border-line pt-4">
+            <Button variant="ghost" onClick={() => setPanel(null)}>
               Cancelar
             </Button>
-            <Button type="submit" size="sm" isLoading={submitting}>
-              Guardar Producto
+            <Button type="submit" isLoading={saving}>
+              Guardar
             </Button>
           </div>
         </form>
       </Modal>
-    </div>
+
+      <Modal
+        isOpen={panel?.kind === 'purchase' || panel?.kind === 'adjust'}
+        onClose={() => setPanel(null)}
+        title={panel?.kind === 'purchase' ? 'Registrar entrada' : 'Ajuste de inventario'}
+        description={panel && 'product' in panel && panel.product ? `${panel.product.name} · existencias actuales: ${panel.product.stock}` : undefined}
+      >
+        <form onSubmit={submitMovement} className="space-y-4" noValidate>
+          <Input label={panel?.kind === 'purchase' ? 'Unidades compradas *' : 'Cantidad (+ entrada / − salida) *'} type="number" {...field('quantity')} />
+          {panel?.kind === 'purchase' && (
+            <Input label="Costo unitario (COP) *" type="number" min={0} step={100} hint="Actualiza el costo promedio ponderado." {...field('unitCost')} />
+          )}
+          <Input label={panel?.kind === 'purchase' ? 'Proveedor / nota' : 'Motivo *'} placeholder={panel?.kind === 'adjust' ? 'Conteo físico, daño, uso interno…' : ''} {...field('reason')} />
+          {error && <Alert>{error}</Alert>}
+          <div className="flex justify-end gap-2 border-t border-line pt-4">
+            <Button variant="ghost" onClick={() => setPanel(null)}>
+              Cancelar
+            </Button>
+            <Button type="submit" isLoading={saving}>
+              Registrar
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        isOpen={panel?.kind === 'movements'}
+        onClose={() => setPanel(null)}
+        title="Historial de movimientos"
+        description={panel?.kind === 'movements' && panel.product ? panel.product.name : 'Últimos 200 movimientos'}
+        size="xl"
+      >
+        {panel?.kind === 'movements' && <Movements product={panel.product} />}
+      </Modal>
+    </>
   );
 };

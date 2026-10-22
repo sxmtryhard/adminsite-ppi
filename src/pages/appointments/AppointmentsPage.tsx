@@ -1,345 +1,218 @@
-import React, { useEffect, useState } from 'react';
-import { Plus, Calendar, Clock, CheckCircle2, XCircle, Trash2, Scissors, User } from 'lucide-react';
-import { Appointment, CreateAppointmentDTO, AppointmentStatus } from '@/types/appointment.types';
-import { Client } from '@/types/client.types';
-import { ServiceItem } from '@/types/service.types';
+import React, { useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { CalendarDays, Plus } from 'lucide-react';
+import { PageHeader, Segmented } from '@/components/common/Layout';
+import { Button } from '@/components/common/Button';
+import { Input, Select } from '@/components/common/Input';
+import { Alert, EmptyState, SkeletonRows } from '@/components/common/Feedback';
+import { StatusBadge } from '@/components/common/StatusBadge';
+import { AppointmentActions } from '@/components/appointments/AppointmentActions';
+import { BookingModal } from './BookingModal';
+import { useAsync } from '@/hooks/useAsync';
+import { useSettings } from '@/hooks/useSettings';
 import { appointmentsService } from '@/services/firebase/appointments.service';
 import { clientsService } from '@/services/firebase/clients.service';
 import { servicesService } from '@/services/firebase/services.service';
-import { Button } from '@/components/common/Button';
-import { Input } from '@/components/common/Input';
-import { StatusBadge } from '@/components/common/StatusBadge';
-import { Modal } from '@/components/common/Modal';
+import { barbersService } from '@/services/firebase/barbers.service';
+import { STATUS_LABELS } from '@/domain/appointmentStatus';
+import { addDays, businessDate, formatLongDate } from '@/domain/time';
+import { formatCOP } from '@/lib/format';
+import type { AppointmentStatus } from '@/types/appointment.types';
+
+type RangePreset = 'today' | 'tomorrow' | 'week' | 'custom';
 
 export const AppointmentsPage: React.FC = () => {
-  const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [clients, setClients] = useState<Client[]>([]);
-  const [services, setServices] = useState<ServiceItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [params, setParams] = useSearchParams();
+  const today = businessDate();
+  const [preset, setPreset] = useState<RangePreset>('today');
+  const [custom, setCustom] = useState({ from: today, to: addDays(today, 7) });
+  const [barberFilter, setBarberFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | AppointmentStatus>('all');
+  const [actionError, setActionError] = useState<string | null>(null);
+  const isModalOpen = params.get('nueva') === '1';
 
-  // Form State
-  const [selectedClientId, setSelectedClientId] = useState('');
-  const [selectedServiceId, setSelectedServiceId] = useState('');
-  const [date, setDate] = useState(() => new Date().toISOString().split('T')[0]);
-  const [time, setTime] = useState('10:00');
-  const [barberName, setBarberName] = useState('Barbero de turno');
-  const [notes, setNotes] = useState('');
+  const range =
+    preset === 'today'
+      ? { from: today, to: today }
+      : preset === 'tomorrow'
+        ? { from: addDays(today, 1), to: addDays(today, 1) }
+        : preset === 'week'
+          ? { from: today, to: addDays(today, 6) }
+          : custom;
 
-  const loadData = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [apptsData, clientsData, svcsData] = await Promise.all([
-        appointmentsService.getAppointments(),
-        clientsService.getClients(),
-        servicesService.getServices(),
-      ]);
-      setAppointments(apptsData);
-      setClients(clientsData);
-      setServices(svcsData);
-      if (svcsData.length > 0) setSelectedServiceId(svcsData[0].id);
-      if (clientsData.length > 0) setSelectedClientId(clientsData[0].id);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Error inesperado al cargar la agenda.');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const { settings } = useSettings();
+  const appointments = useAsync(() => appointmentsService.listByRange(range.from, range.to), [range.from, range.to]);
+  const catalog = useAsync(
+    () => Promise.all([clientsService.getClients(), servicesService.getServices(), barbersService.getBarbers()]),
+    []
+  );
+  const [clients, services, barbers] = catalog.data ?? [[], [], []];
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  const filtered = useMemo(
+    () =>
+      (appointments.data ?? []).filter(
+        (a) => (barberFilter === 'all' || a.barberId === barberFilter) && (statusFilter === 'all' || a.status === statusFilter)
+      ),
+    [appointments.data, barberFilter, statusFilter]
+  );
 
-  const handleCreateAppointment = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSubmitting(true);
+  const byDate = useMemo(() => {
+    const groups = new Map<string, typeof filtered>();
+    for (const a of filtered) groups.set(a.date, [...(groups.get(a.date) ?? []), a]);
+    return [...groups.entries()];
+  }, [filtered]);
 
-    const client = clients.find((c) => c.id === selectedClientId);
-    const service = services.find((s) => s.id === selectedServiceId);
-
-    if (!client || !service) {
-      alert('Debes seleccionar un cliente y un servicio válidos.');
-      setSubmitting(false);
-      return;
-    }
-
-    const payload: CreateAppointmentDTO = {
-      clientId: client.id,
-      clientName: client.fullName,
-      clientPhone: client.phone,
-      serviceId: service.id,
-      serviceName: service.name,
-      servicePrice: service.price,
-      durationMinutes: service.durationMinutes,
-      barberName,
-      date,
-      time,
-      status: 'pending',
-      notes,
-    };
-
-    try {
-      await appointmentsService.createAppointment(payload);
-      setIsModalOpen(false);
-      setNotes('');
-      await loadData();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Error al registrar la cita.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleUpdateStatus = async (id: string, status: AppointmentStatus) => {
-    try {
-      await appointmentsService.updateStatus(id, status);
-      setAppointments((prev) =>
-        prev.map((a) => (a.id === id ? { ...a, status } : a))
-      );
-    } catch {
-      alert('No fue posible actualizar el estado.');
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('¿Deseas eliminar este turno agendado?')) return;
-    try {
-      await appointmentsService.deleteAppointment(id);
-      setAppointments((prev) => prev.filter((a) => a.id !== id));
-    } catch {
-      alert('No fue posible eliminar la cita.');
-    }
-  };
-
-  const formatCOP = (val: number) => {
-    return new Intl.NumberFormat('es-CO', {
-      style: 'currency',
-      currency: 'COP',
-      maximumFractionDigits: 0,
-    }).format(val);
+  const setModal = (open: boolean) => {
+    const next = new URLSearchParams(params);
+    if (open) next.set('nueva', '1');
+    else next.delete('nueva');
+    setParams(next, { replace: true });
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-neutral-100">Agenda de Citas</h1>
-          <p className="text-xs text-neutral-400">Control de turnos y agenda diaria de XAC Barber Studio</p>
+    <>
+      <PageHeader
+        title="Agenda general"
+        description="Citas de todos los barberos, con disponibilidad y estados en tiempo real."
+        actions={
+          <Button onClick={() => setModal(true)}>
+            <Plus className="h-4 w-4" aria-hidden /> Nueva cita
+          </Button>
+        }
+      />
+
+      <div className="card flex flex-col gap-3 p-4 lg:flex-row lg:items-end">
+        <Segmented
+          label="Rango de fechas"
+          value={preset}
+          onChange={setPreset}
+          options={[
+            { value: 'today', label: 'Hoy' },
+            { value: 'tomorrow', label: 'Mañana' },
+            { value: 'week', label: '7 días' },
+            { value: 'custom', label: 'Personalizado' },
+          ]}
+        />
+        {preset === 'custom' && (
+          <div className="grid grid-cols-2 gap-2 lg:w-80">
+            <Input label="Desde" type="date" value={custom.from} onChange={(e) => setCustom({ ...custom, from: e.target.value })} />
+            <Input label="Hasta" type="date" min={custom.from} value={custom.to} onChange={(e) => setCustom({ ...custom, to: e.target.value })} />
+          </div>
+        )}
+        <div className="grid flex-1 grid-cols-2 gap-2 lg:ml-auto lg:max-w-md">
+          <Select label="Barbero" value={barberFilter} onChange={(e) => setBarberFilter(e.target.value)}>
+            <option value="all">Todos</option>
+            {barbers.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.fullName}
+              </option>
+            ))}
+          </Select>
+          <Select label="Estado" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}>
+            <option value="all">Todos</option>
+            {Object.entries(STATUS_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </Select>
         </div>
-        <Button onClick={() => setIsModalOpen(true)} size="sm">
-          <Plus className="h-4 w-4 mr-1.5" />
-          Nueva Cita
-        </Button>
       </div>
 
-      {error && (
-        <div className="p-3 rounded-md bg-red-500/10 border border-red-500/20 text-xs text-red-400">
-          {error}
+      {(appointments.error || catalog.error) && <Alert>{appointments.error ?? catalog.error}</Alert>}
+      {actionError && <Alert>{actionError}</Alert>}
+
+      {appointments.loading ? (
+        <div className="card">
+          <SkeletonRows rows={5} />
         </div>
+      ) : byDate.length === 0 ? (
+        <div className="card">
+          <EmptyState
+            icon={CalendarDays}
+            title="No hay citas en este rango"
+            description="Cambia los filtros o agenda una nueva cita."
+            action={<Button size="sm" onClick={() => setModal(true)}>Agendar cita</Button>}
+          />
+        </div>
+      ) : (
+        byDate.map(([date, list]) => (
+          <section key={date} className="card overflow-hidden">
+            <h2 className="border-b border-line px-5 py-3 text-sm font-semibold capitalize text-ink">
+              {formatLongDate(date)} <span className="font-normal text-subtle">· {list.length} citas</span>
+            </h2>
+            <div className="overflow-x-auto">
+              <table className="table-base min-w-[820px]">
+                <thead>
+                  <tr>
+                    <th>Hora</th>
+                    <th>Cliente</th>
+                    <th>Servicio</th>
+                    <th>Barbero</th>
+                    <th>Estado</th>
+                    <th className="text-right">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {list.map((a) => (
+                    <tr key={a.id}>
+                      <td className="whitespace-nowrap font-medium tabular-nums">
+                        {a.time}
+                        <span className="block text-xs font-normal text-subtle">{a.durationMinutes} min</span>
+                      </td>
+                      <td>
+                        {a.clientName}
+                        <span className="block text-xs text-subtle">{a.clientPhone}</span>
+                      </td>
+                      <td>
+                        {a.serviceName}
+                        <span className="block text-xs text-subtle">{formatCOP(a.servicePrice)}</span>
+                      </td>
+                      <td>{a.barberName}</td>
+                      <td>
+                        <StatusBadge status={a.status} />
+                        {a.status === 'completed' && (
+                          <span className={`mt-1 block text-xs ${a.saleId ? 'text-success' : 'text-warning'}`}>
+                            {a.saleId ? 'Cobrada' : 'Por cobrar'}
+                          </span>
+                        )}
+                      </td>
+                      <td>
+                        <div className="flex justify-end">
+                          <AppointmentActions
+                            appointment={a}
+                            settings={settings}
+                            onChanged={() => {
+                              setActionError(null);
+                              appointments.reload();
+                            }}
+                            onError={setActionError}
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ))
       )}
 
-      <div className="rounded-lg border border-neutral-800 bg-neutral-950 overflow-hidden shadow-sm">
-        <table className="w-full text-left text-xs">
-          <thead className="border-b border-neutral-800 bg-neutral-900/40 text-neutral-400 font-medium select-none">
-            <tr>
-              <th className="py-3 px-4">Fecha y Hora</th>
-              <th className="py-3 px-4">Cliente</th>
-              <th className="py-3 px-4">Servicio</th>
-              <th className="py-3 px-4">Barbero</th>
-              <th className="py-3 px-4">Total</th>
-              <th className="py-3 px-4">Estado</th>
-              <th className="py-3 px-4 text-right">Acciones</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-neutral-800/40">
-            {loading ? (
-              Array.from({ length: 4 }).map((_, i) => (
-                <tr key={i} className="animate-pulse">
-                  <td className="py-3.5 px-4"><div className="h-3.5 w-24 bg-neutral-800 rounded" /></td>
-                  <td className="py-3.5 px-4"><div className="h-3.5 w-32 bg-neutral-800 rounded" /></td>
-                  <td className="py-3.5 px-4"><div className="h-3.5 w-28 bg-neutral-800 rounded" /></td>
-                  <td className="py-3.5 px-4"><div className="h-3.5 w-20 bg-neutral-800 rounded" /></td>
-                  <td className="py-3.5 px-4"><div className="h-3.5 w-16 bg-neutral-800 rounded" /></td>
-                  <td className="py-3.5 px-4"><div className="h-3.5 w-14 bg-neutral-800 rounded" /></td>
-                  <td className="py-3.5 px-4 text-right"><div className="h-3.5 w-12 bg-neutral-800 rounded ml-auto" /></td>
-                </tr>
-              ))
-            ) : appointments.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="py-12 text-center text-neutral-500 space-y-2">
-                  <Calendar className="h-8 w-8 mx-auto stroke-[1.25] text-neutral-600" />
-                  <p>No hay citas agendadas aún.</p>
-                </td>
-              </tr>
-            ) : (
-              appointments.map((appt) => (
-                <tr key={appt.id} className="hover:bg-neutral-900/30 transition-colors">
-                  <td className="py-3 px-4">
-                    <div className="font-medium text-neutral-200">{appt.date}</div>
-                    <div className="text-[11px] text-neutral-500 font-mono flex items-center gap-1">
-                      <Clock className="h-3 w-3" />
-                      {appt.time} ({appt.durationMinutes} min)
-                    </div>
-                  </td>
-                  <td className="py-3 px-4">
-                    <div className="font-medium text-neutral-200">{appt.clientName}</div>
-                    <div className="text-[11px] text-neutral-500 font-mono">{appt.clientPhone}</div>
-                  </td>
-                  <td className="py-3 px-4 text-neutral-300">
-                    <div className="flex items-center gap-1.5">
-                      <Scissors className="h-3.5 w-3.5 text-neutral-500" />
-                      <span>{appt.serviceName}</span>
-                    </div>
-                  </td>
-                  <td className="py-3 px-4 text-neutral-300">
-                    <div className="flex items-center gap-1.5">
-                      <User className="h-3.5 w-3.5 text-neutral-500" />
-                      <span>{appt.barberName}</span>
-                    </div>
-                  </td>
-                  <td className="py-3 px-4 font-mono font-medium text-neutral-200">
-                    {formatCOP(appt.servicePrice)}
-                  </td>
-                  <td className="py-3 px-4">
-                    <StatusBadge status={appt.status} />
-                  </td>
-                  <td className="py-3 px-4 text-right">
-                    <div className="inline-flex items-center gap-1">
-                      {appt.status === 'pending' && (
-                        <>
-                          <button
-                            onClick={() => handleUpdateStatus(appt.id, 'completed')}
-                            className="p-1 text-neutral-500 hover:text-emerald-400 transition-colors"
-                            title="Marcar completada"
-                          >
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleUpdateStatus(appt.id, 'cancelled')}
-                            className="p-1 text-neutral-500 hover:text-amber-400 transition-colors"
-                            title="Cancelar cita"
-                          >
-                            <XCircle className="h-3.5 w-3.5" />
-                          </button>
-                        </>
-                      )}
-                      <button
-                        onClick={() => handleDelete(appt.id)}
-                        className="p-1 text-neutral-500 hover:text-red-400 transition-colors"
-                        title="Eliminar registro"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Modal Agendar Cita */}
-      <Modal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        title="Agendar Nueva Cita"
-        description="Selecciona cliente, servicio y fecha para la cita."
-      >
-        <form onSubmit={handleCreateAppointment} className="space-y-4 pt-1">
-          <div className="space-y-1.5 text-left">
-            <label className="text-xs font-medium text-neutral-400">Cliente *</label>
-            {clients.length === 0 ? (
-              <p className="text-xs text-amber-400">No hay clientes registrados. Agrega uno primero en Clientes.</p>
-            ) : (
-              <select
-                value={selectedClientId}
-                onChange={(e) => setSelectedClientId(e.target.value)}
-                required
-                className="w-full h-9 rounded-md border border-neutral-800 bg-neutral-900/50 px-3 text-xs text-neutral-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400"
-              >
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.fullName} ({c.phone})
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          <div className="space-y-1.5 text-left">
-            <label className="text-xs font-medium text-neutral-400">Servicio *</label>
-            {services.length === 0 ? (
-              <p className="text-xs text-amber-400">No hay servicios en la carta. Agrega uno primero en Servicios.</p>
-            ) : (
-              <select
-                value={selectedServiceId}
-                onChange={(e) => setSelectedServiceId(e.target.value)}
-                required
-                className="w-full h-9 rounded-md border border-neutral-800 bg-neutral-900/50 px-3 text-xs text-neutral-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400"
-              >
-                {services.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} - {formatCOP(s.price)} ({s.durationMinutes} min)
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          <Input
-            label="Barbero asignado"
-            placeholder="Ej. Carlos Restrepo"
-            value={barberName}
-            onChange={(e) => setBarberName(e.target.value)}
-          />
-
-          <div className="grid grid-cols-2 gap-3">
-            <Input
-              label="Fecha *"
-              type="date"
-              required
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-            />
-            <Input
-              label="Hora *"
-              type="time"
-              required
-              value={time}
-              onChange={(e) => setTime(e.target.value)}
-            />
-          </div>
-
-          <div className="space-y-1.5 text-left">
-            <label className="text-xs font-medium text-neutral-400">Notas adicionales</label>
-            <textarea
-              rows={2}
-              placeholder="Detalles sobre preferencias o requerimientos del cliente..."
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              className="w-full rounded-md border border-neutral-800 bg-neutral-900/50 p-2 text-xs text-neutral-100 placeholder:text-neutral-500 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-400"
-            />
-          </div>
-
-          <div className="flex justify-end gap-2 pt-3 border-t border-neutral-800/40">
-            <Button type="button" variant="ghost" size="sm" onClick={() => setIsModalOpen(false)}>
-              Cancelar
-            </Button>
-            <Button
-              type="submit"
-              size="sm"
-              isLoading={submitting}
-              disabled={clients.length === 0 || services.length === 0}
-            >
-              Confirmar Cita
-            </Button>
-          </div>
-        </form>
-      </Modal>
-    </div>
+      {isModalOpen && (
+        <BookingModal
+          isOpen
+          onClose={() => setModal(false)}
+          onBooked={() => {
+            setModal(false);
+            appointments.reload();
+          }}
+          clients={clients}
+          services={services}
+          barbers={barbers}
+          settings={settings}
+        />
+      )}
+    </>
   );
 };
