@@ -23,6 +23,7 @@ export const AUDIT_LABELS: Record<AuditAction, string> = {
   'appointment.rescheduled': 'Cita reprogramada',
   'barber.commission_changed': 'Comisión de barbero',
   'settings.updated': 'Configuración del negocio',
+  'data.migrated': 'Migración de datos antiguos',
 };
 
 export const auditService = {

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Building2, CalendarClock } from 'lucide-react';
+import { Building2, CalendarClock, DatabaseZap } from 'lucide-react';
 import { Card, PageHeader } from '@/components/common/Layout';
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
@@ -7,11 +7,68 @@ import { Alert, Spinner } from '@/components/common/Feedback';
 import { useSession } from '@/context/auth-context';
 import { useSettings } from '@/hooks/useSettings';
 import { settingsService } from '@/services/firebase/settings.service';
+import { migrationService } from '@/services/firebase/migration.service';
+import { useAsync } from '@/hooks/useAsync';
 import { toUserMessage } from '@/services/firebase/helpers';
 import { cleanText } from '@/domain/validation';
 import type { BusinessSettings } from '@/types/settings.types';
 
 const intIn = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
+
+/** Detecta y adapta documentos creados con la versión anterior del sistema. */
+const MigrationCard: React.FC = () => {
+  const { actor } = useSession();
+  const scan = useAsync(() => migrationService.scan(), []);
+  const [running, setRunning] = useState(false);
+  const [message, setMessage] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
+  const pending = (scan.data?.products.length ?? 0) + (scan.data?.barbers.length ?? 0);
+
+  const run = async () => {
+    setRunning(true);
+    setMessage(null);
+    try {
+      const result = await migrationService.run(actor);
+      setMessage({ tone: 'success', text: `Migración completada: ${result.products} producto(s) y ${result.barbers} barbero(s).` });
+      scan.reload();
+    } catch (err) {
+      setMessage({ tone: 'error', text: toUserMessage(err, 'No fue posible migrar los datos.') });
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <Card title="Datos de la versión anterior" icon={DatabaseZap} description="Mueve costos y teléfonos que estaban en documentos públicos a sus colecciones privadas.">
+      {scan.loading ? (
+        <Spinner />
+      ) : scan.error ? (
+        <Alert>{scan.error}</Alert>
+      ) : pending === 0 ? (
+        <Alert tone="success">Todos los datos están en el formato actual.</Alert>
+      ) : (
+        <div className="space-y-3 text-sm">
+          <ul className="list-disc space-y-1 pl-5 text-muted">
+            {scan.data?.products.map((p) => (
+              <li key={p.id}>
+                Producto <span className="text-ink">{p.name}</span>: costo visible públicamente; se moverá al costo privado.
+              </li>
+            ))}
+            {scan.data?.barbers.map((b) => (
+              <li key={b.id}>
+                Barbero <span className="text-ink">{b.name}</span>: {b.hasPhone ? 'teléfono visible públicamente; se moverá a datos privados' : 'faltan campos nuevos'}.
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-subtle">No cambia precios, existencias ni horarios. Queda registrado en la auditoría.</p>
+          <Button onClick={run} isLoading={running}>
+            Migrar {pending} registro(s)
+          </Button>
+        </div>
+      )}
+      {message && <Alert tone={message.tone} className="mt-3">{message.text}</Alert>}
+    </Card>
+  );
+};
 
 export const SettingsPage: React.FC = () => {
   const { actor } = useSession();
@@ -121,6 +178,7 @@ export const SettingsPage: React.FC = () => {
           </Button>
         </div>
       </form>
+      <MigrationCard />
     </>
   );
 };

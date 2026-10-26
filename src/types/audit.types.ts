@@ -17,7 +17,8 @@ export type AuditAction =
   | 'appointment.status_changed'
   | 'appointment.rescheduled'
   | 'barber.commission_changed'
-  | 'settings.updated';
+  | 'settings.updated'
+  | 'data.migrated';
 
 export interface AuditEntry {
   id: string;
