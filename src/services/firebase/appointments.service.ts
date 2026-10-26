@@ -157,17 +157,14 @@ export const appointmentsService = {
         ? await Promise.all(appt.slotIds.map((s) => tx.get(doc(db, 'slots', s))))
         : [];
 
-      tx.update(ref, {
-        status: to,
-        updatedAt: serverTimestamp(),
-        cancelReason: to === 'cancelled' ? cleanText(ctx.reason ?? '', 200) || null : appt.cancelReason,
-      });
+      const cancelReason = to === 'cancelled' ? cleanText(ctx.reason ?? '', 200) || null : appt.cancelReason;
+      tx.update(ref, { status: to, updatedAt: serverTimestamp(), cancelReason });
       for (const s of slotSnaps) {
         if (s.exists() && s.data().appointmentId === id) tx.delete(s.ref);
       }
       addAudit(tx, actor, 'appointment.status_changed', 'appointments', id, { from: appt.status, to });
       return {
-        appointment: { ...appt, status: to },
+        appointment: { ...appt, status: to, cancelReason },
         clientUserId: strOrNull(snap.data().clientUserId),
         barberUserId: strOrNull(snap.data().barberUserId),
       };
