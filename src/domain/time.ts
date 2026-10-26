@@ -74,3 +74,9 @@ export const formatLongDate = (date: string): string =>
     month: 'long',
     timeZone: 'UTC',
   }).format(new Date(`${date}T00:00:00Z`));
+
+/** Lunes de la semana que contiene la fecha dada. */
+export const startOfWeek = (date: string): string => {
+  const wd = weekday(date);
+  return addDays(date, wd === 0 ? -6 : 1 - wd);
+};

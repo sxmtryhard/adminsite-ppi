@@ -8,6 +8,8 @@ import { Alert, EmptyState, SkeletonRows } from '@/components/common/Feedback';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { AppointmentActions } from '@/components/appointments/AppointmentActions';
 import { BookingModal } from './BookingModal';
+import { WeekCalendar } from '@/components/appointments/WeekCalendar';
+import { AppointmentCard } from '@/components/appointments/AppointmentCard';
 import { useAsync } from '@/hooks/useAsync';
 import { useSettings } from '@/hooks/useSettings';
 import { appointmentsService } from '@/services/firebase/appointments.service';
@@ -15,16 +17,18 @@ import { clientsService } from '@/services/firebase/clients.service';
 import { servicesService } from '@/services/firebase/services.service';
 import { barbersService } from '@/services/firebase/barbers.service';
 import { STATUS_LABELS } from '@/domain/appointmentStatus';
-import { addDays, businessDate, formatLongDate } from '@/domain/time';
+import { addDays, businessDate, formatLongDate, startOfWeek } from '@/domain/time';
 import { formatCOP } from '@/lib/format';
 import type { AppointmentStatus } from '@/types/appointment.types';
 
-type RangePreset = 'today' | 'tomorrow' | 'week' | 'custom';
+type RangePreset = 'calendar' | 'today' | 'tomorrow' | 'week' | 'custom';
 
 export const AppointmentsPage: React.FC = () => {
   const [params, setParams] = useSearchParams();
   const today = businessDate();
-  const [preset, setPreset] = useState<RangePreset>('today');
+  const [preset, setPreset] = useState<RangePreset>('calendar');
+  const [weekStart, setWeekStart] = useState(() => startOfWeek(today));
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [custom, setCustom] = useState({ from: today, to: addDays(today, 7) });
   const [barberFilter, setBarberFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState<'all' | AppointmentStatus>('all');
@@ -32,7 +36,9 @@ export const AppointmentsPage: React.FC = () => {
   const isModalOpen = params.get('nueva') === '1';
 
   const range =
-    preset === 'today'
+    preset === 'calendar'
+      ? { from: weekStart, to: addDays(weekStart, 6) }
+      : preset === 'today'
       ? { from: today, to: today }
       : preset === 'tomorrow'
         ? { from: addDays(today, 1), to: addDays(today, 1) }
@@ -55,6 +61,8 @@ export const AppointmentsPage: React.FC = () => {
       ),
     [appointments.data, barberFilter, statusFilter]
   );
+
+  const selected = filtered.find((a) => a.id === selectedId) ?? null;
 
   const byDate = useMemo(() => {
     const groups = new Map<string, typeof filtered>();
@@ -87,6 +95,7 @@ export const AppointmentsPage: React.FC = () => {
           value={preset}
           onChange={setPreset}
           options={[
+            { value: 'calendar', label: 'Calendario' },
             { value: 'today', label: 'Hoy' },
             { value: 'tomorrow', label: 'Mañana' },
             { value: 'week', label: '7 días' },
@@ -122,7 +131,44 @@ export const AppointmentsPage: React.FC = () => {
       {(appointments.error || catalog.error) && <Alert>{appointments.error ?? catalog.error}</Alert>}
       {actionError && <Alert>{actionError}</Alert>}
 
-      {appointments.loading ? (
+      {preset === 'calendar' ? (
+        <>
+          <WeekCalendar
+            weekStart={weekStart}
+            onWeekChange={(w) => {
+              setWeekStart(w);
+              setSelectedId(null);
+            }}
+            appointments={filtered}
+            selectedId={selectedId}
+            onSelect={(a) => setSelectedId(a.id)}
+            showBarber
+          />
+          {appointments.loading && <SkeletonRows rows={1} />}
+          {selected ? (
+            <AppointmentCard
+              appointment={selected}
+              perspective="barber"
+              actions={
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs text-muted">Barbero: {selected.barberName}</span>
+                  <AppointmentActions
+                    appointment={selected}
+                    settings={settings}
+                    onChanged={() => {
+                      setActionError(null);
+                      appointments.reload();
+                    }}
+                    onError={setActionError}
+                  />
+                </div>
+              }
+            />
+          ) : (
+            <p className="text-xs text-subtle">Haz clic en una cita del calendario para ver el detalle y cambiar su estado.</p>
+          )}
+        </>
+      ) : appointments.loading ? (
         <div className="card">
           <SkeletonRows rows={5} />
         </div>

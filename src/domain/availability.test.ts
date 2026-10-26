@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WeeklySchedule } from '@/types/barber.types';
 import { availableStartTimes, hasWorkingDays, isValidDaySchedule, mergeTimes, pickAnyBarber, slotCount, slotKeysFor, type AvailabilityInput } from './availability';
-import { businessDate, businessMinutes, toInstant } from './time';
+import { businessDate, businessMinutes, startOfWeek, toInstant } from './time';
 
 // 2026-10-26 es lunes.
 const MONDAY = '2026-10-26';
@@ -116,5 +116,13 @@ describe('hasWorkingDays', () => {
     expect(hasWorkingDays(schedule)).toBe(true);
     expect(hasWorkingDays({})).toBe(false);
     expect(hasWorkingDays({ '1': null, '2': { start: '18:00', end: '09:00' } })).toBe(false);
+  });
+});
+
+describe('startOfWeek', () => {
+  it('devuelve el lunes de la semana (domingo pertenece a la semana anterior)', () => {
+    expect(startOfWeek('2026-10-26')).toBe('2026-10-26');
+    expect(startOfWeek('2026-10-29')).toBe('2026-10-26');
+    expect(startOfWeek('2026-11-01')).toBe('2026-10-26');
   });
 });
