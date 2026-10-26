@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Download, History, Printer, Search } from 'lucide-react';
+import { Download, History, Printer, Receipt, Search } from 'lucide-react';
 import { PageHeader, Segmented } from '@/components/common/Layout';
 import { Button } from '@/components/common/Button';
 import { Input, Select } from '@/components/common/Input';
@@ -15,11 +15,14 @@ import { STATUS_LABELS } from '@/domain/appointmentStatus';
 import { businessDate, addDays } from '@/domain/time';
 import { formatCOP, formatDateTime } from '@/lib/format';
 import { exportToCSV } from '@/utils/exportCsv';
+import { printReceipt } from '@/utils/printReceipt';
+import { useSettings } from '@/hooks/useSettings';
 import { PAYMENT_LABELS, type PaymentMethod, type Sale } from '@/types/sale.types';
 import type { AppointmentStatus } from '@/types/appointment.types';
 
 export const HistoryPage: React.FC = () => {
   const { actor } = useSession();
+  const { settings } = useSettings();
   const today = businessDate();
   const [tab, setTab] = useState<'sales' | 'appointments'>('sales');
   const [range, setRange] = useState({ from: addDays(today, -29), to: today });
@@ -241,7 +244,17 @@ export const HistoryPage: React.FC = () => {
                           {s.status === 'paid' ? <Badge tone="success">Pagada</Badge> : <Badge tone="danger">Anulada</Badge>}
                           {s.voidReason && <span className="block text-xs text-subtle">{s.voidReason}</span>}
                         </td>
-                        <td className="no-print text-right">
+                        <td className="no-print whitespace-nowrap text-right">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              const ok = printReceipt(s, { name: settings.studioName, phone: settings.phone, address: settings.address });
+                              setNotice(ok ? null : 'El navegador bloqueó la ventana del comprobante. Permite ventanas emergentes para este sitio.');
+                            }}
+                          >
+                            <Receipt className="h-3.5 w-3.5" aria-hidden /> Comprobante
+                          </Button>
                           {s.status === 'paid' && (
                             <Button size="sm" variant="ghost" className="text-danger" onClick={() => setVoiding(s)}>
                               Anular
