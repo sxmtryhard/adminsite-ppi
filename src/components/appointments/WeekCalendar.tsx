@@ -2,21 +2,10 @@ import React from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/common/Button';
 import { cn } from '@/lib/utils';
-import { addDays, businessDate, businessMinutes, fromMinutes, startOfWeek, toMinutes, WEEKDAY_LABELS } from '@/domain/time';
-import type { Appointment, AppointmentStatus } from '@/types/appointment.types';
-
-const START_HOUR = 7;
-const END_HOUR = 21;
-const HOUR_PX = 56;
-
-const STATUS_STYLES: Record<AppointmentStatus, string> = {
-  pending: 'border-warning/60 bg-warning/15 text-warning',
-  confirmed: 'border-info/60 bg-info/15 text-info',
-  in_progress: 'border-accent/70 bg-accent/25 text-[#c7d2fe]',
-  completed: 'border-success/60 bg-success/15 text-success',
-  cancelled: 'border-danger/40 bg-danger/10 text-danger/80 line-through',
-  no_show: 'border-line bg-surface-2 text-subtle',
-};
+import { addDays, businessDate, businessMinutes, startOfWeek, WEEKDAY_LABELS } from '@/domain/time';
+import type { Appointment } from '@/types/appointment.types';
+import { END_HOUR, HOUR_PX, START_HOUR, minuteToPx } from './calendarShared';
+import { CalendarEvents } from './CalendarEvents';
 
 export const WeekCalendar: React.FC<{
   weekStart: string;
@@ -30,7 +19,7 @@ export const WeekCalendar: React.FC<{
   const days = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR + i);
   const height = (END_HOUR - START_HOUR) * HOUR_PX;
-  const nowTop = ((businessMinutes() - START_HOUR * 60) / 60) * HOUR_PX;
+  const nowTop = minuteToPx(businessMinutes());
   const fmt = (d: string) => new Intl.DateTimeFormat('es-CO', { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(new Date(`${d}T00:00:00Z`));
 
   return (
@@ -71,43 +60,22 @@ export const WeekCalendar: React.FC<{
                 </span>
               ))}
             </div>
-            {days.map((d) => {
-              const dayAppts = appointments.filter((a) => a.date === d);
-              return (
-                <div key={d} className={cn('relative border-l border-line', d === today && 'bg-accent/[0.04]')}>
-                  {hours.map((h) => (
-                    <div key={h} className="absolute inset-x-0 border-t border-line/50" style={{ top: (h - START_HOUR) * HOUR_PX }} />
-                  ))}
-                  {d === today && nowTop > 0 && nowTop < height && (
-                    <div className="absolute inset-x-0 z-10 h-px bg-danger" style={{ top: nowTop }} aria-hidden />
-                  )}
-                  {dayAppts.map((a) => {
-                    const start = toMinutes(a.time);
-                    const top = ((start - START_HOUR * 60) / 60) * HOUR_PX;
-                    const h = Math.max((a.durationMinutes / 60) * HOUR_PX - 2, 22);
-                    if (top + h < 0 || top > height) return null;
-                    return (
-                      <button
-                        key={a.id}
-                        type="button"
-                        onClick={() => onSelect(a)}
-                        title={`${a.time}–${fromMinutes(start + a.durationMinutes)} · ${a.clientName} · ${a.serviceName}${showBarber ? ` · ${a.barberName}` : ''}`}
-                        className={cn(
-                          'absolute inset-x-1 overflow-hidden rounded-lg border px-1.5 py-1 text-left text-[11px] leading-tight transition hover:brightness-125',
-                          STATUS_STYLES[a.status],
-                          selectedId === a.id && 'ring-2 ring-accent'
-                        )}
-                        style={{ top: Math.max(top, 0), height: h }}
-                      >
-                        <span className="block font-semibold tabular-nums">{a.time}</span>
-                        <span className="block truncate text-ink/90">{a.clientName}</span>
-                        {h > 50 && <span className="block truncate opacity-80">{showBarber ? a.barberName : a.serviceName}</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-              );
-            })}
+            {days.map((d) => (
+              <div key={d} className={cn('relative border-l border-line', d === today && 'bg-accent/[0.04]')}>
+                {hours.map((h) => (
+                  <div key={h} className="absolute inset-x-0 border-t border-line/50" style={{ top: (h - START_HOUR) * HOUR_PX }} />
+                ))}
+                {d === today && nowTop > 0 && nowTop < height && (
+                  <div className="absolute inset-x-0 z-10 h-px bg-danger" style={{ top: nowTop }} aria-hidden />
+                )}
+                <CalendarEvents
+                  appointments={appointments.filter((a) => a.date === d)}
+                  selectedId={selectedId}
+                  onSelect={onSelect}
+                  detail={(a) => (showBarber ? a.barberName : a.serviceName)}
+                />
+              </div>
+            ))}
           </div>
         </div>
       </div>

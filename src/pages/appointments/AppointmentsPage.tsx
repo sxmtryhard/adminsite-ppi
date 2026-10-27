@@ -9,6 +9,7 @@ import { StatusBadge } from '@/components/common/StatusBadge';
 import { AppointmentActions } from '@/components/appointments/AppointmentActions';
 import { BookingModal } from './BookingModal';
 import { WeekCalendar } from '@/components/appointments/WeekCalendar';
+import { DayBarberCalendar } from '@/components/appointments/DayBarberCalendar';
 import { AppointmentCard } from '@/components/appointments/AppointmentCard';
 import { useAsync } from '@/hooks/useAsync';
 import { useSettings } from '@/hooks/useSettings';
@@ -21,12 +22,13 @@ import { addDays, businessDate, formatLongDate, startOfWeek } from '@/domain/tim
 import { formatCOP } from '@/lib/format';
 import type { AppointmentStatus } from '@/types/appointment.types';
 
-type RangePreset = 'calendar' | 'today' | 'tomorrow' | 'week' | 'custom';
+type RangePreset = 'day' | 'calendar' | 'today' | 'tomorrow' | 'week' | 'custom';
 
 export const AppointmentsPage: React.FC = () => {
   const [params, setParams] = useSearchParams();
   const today = businessDate();
-  const [preset, setPreset] = useState<RangePreset>('calendar');
+  const [preset, setPreset] = useState<RangePreset>('day');
+  const [dayDate, setDayDate] = useState(today);
   const [weekStart, setWeekStart] = useState(() => startOfWeek(today));
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [custom, setCustom] = useState({ from: today, to: addDays(today, 7) });
@@ -36,7 +38,9 @@ export const AppointmentsPage: React.FC = () => {
   const isModalOpen = params.get('nueva') === '1';
 
   const range =
-    preset === 'calendar'
+    preset === 'day'
+      ? { from: dayDate, to: dayDate }
+      : preset === 'calendar'
       ? { from: weekStart, to: addDays(weekStart, 6) }
       : preset === 'today'
       ? { from: today, to: today }
@@ -60,6 +64,17 @@ export const AppointmentsPage: React.FC = () => {
         (a) => (barberFilter === 'all' || a.barberId === barberFilter) && (statusFilter === 'all' || a.status === statusFilter)
       ),
     [appointments.data, barberFilter, statusFilter]
+  );
+
+  // Columnas del día: barberos activos y cualquier otro que tenga citas ese día.
+  const dayBarbers = useMemo(
+    () =>
+      barbers.filter(
+        (b) =>
+          (barberFilter === 'all' || b.id === barberFilter) &&
+          (b.status === 'active' || filtered.some((a) => a.barberId === b.id))
+      ),
+    [barbers, barberFilter, filtered]
   );
 
   const selected = filtered.find((a) => a.id === selectedId) ?? null;
@@ -95,7 +110,8 @@ export const AppointmentsPage: React.FC = () => {
           value={preset}
           onChange={setPreset}
           options={[
-            { value: 'calendar', label: 'Calendario' },
+            { value: 'day', label: 'Día por barbero' },
+            { value: 'calendar', label: 'Semana' },
             { value: 'today', label: 'Hoy' },
             { value: 'tomorrow', label: 'Mañana' },
             { value: 'week', label: '7 días' },
@@ -131,19 +147,33 @@ export const AppointmentsPage: React.FC = () => {
       {(appointments.error || catalog.error) && <Alert>{appointments.error ?? catalog.error}</Alert>}
       {actionError && <Alert>{actionError}</Alert>}
 
-      {preset === 'calendar' ? (
+      {preset === 'day' || preset === 'calendar' ? (
         <>
-          <WeekCalendar
-            weekStart={weekStart}
-            onWeekChange={(w) => {
-              setWeekStart(w);
-              setSelectedId(null);
-            }}
-            appointments={filtered}
-            selectedId={selectedId}
-            onSelect={(a) => setSelectedId(a.id)}
-            showBarber
-          />
+          {preset === 'day' ? (
+            <DayBarberCalendar
+              date={dayDate}
+              onDateChange={(d) => {
+                setDayDate(d);
+                setSelectedId(null);
+              }}
+              barbers={dayBarbers}
+              appointments={filtered}
+              selectedId={selectedId}
+              onSelect={(a) => setSelectedId(a.id)}
+            />
+          ) : (
+            <WeekCalendar
+              weekStart={weekStart}
+              onWeekChange={(w) => {
+                setWeekStart(w);
+                setSelectedId(null);
+              }}
+              appointments={filtered}
+              selectedId={selectedId}
+              onSelect={(a) => setSelectedId(a.id)}
+              showBarber
+            />
+          )}
           {appointments.loading && <SkeletonRows rows={1} />}
           {selected ? (
             <AppointmentCard

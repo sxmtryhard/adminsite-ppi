@@ -24,6 +24,7 @@ URL: https://adminsite-ppi.vercel.app · Duración sugerida: 15–20 min.
 - Mostrar la **campana del admin** ("Nueva reserva") y la del **barbero**.
 - Intentar reservar la **misma hora** con otra cuenta → ya no aparece. Explicar el **bloqueo de franjas de 15 min en transacción**: si dos personas confirman al mismo tiempo, una recibe "Ese horario acaba de ser reservado".
 - **Mis citas**: cancelar o reprogramar respeta la antelación configurada.
+- **Admin → Citas → Día por barbero**: una columna por barbero. Dos citas a las 11:00 con barberos distintos quedan una al lado de la otra; en la misma columna nunca se cruzan porque el bloqueo de franjas lo impide. Lo sombreado es fuera de la jornada o el descanso.
 
 ### 3. Barbero (3 min)
 - **Mi agenda → Calendario**: ve solo sus citas. Clic en la cita → *Confirmar* → *Iniciar* → *Finalizar*.
