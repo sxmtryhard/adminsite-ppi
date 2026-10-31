@@ -1,7 +1,7 @@
 import { cert, getApp, getApps, initializeApp } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
 import { getFirestore, Timestamp, type Firestore } from 'firebase-admin/firestore';
 import nodemailer from 'nodemailer';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import type { MailConfig } from './config.js';
 import {
   contentFor,
@@ -44,16 +44,41 @@ export interface MailDeps {
   sendMail: (mail: OutgoingMail) => Promise<void>;
 }
 
+/**
+ * Verificación del ID token de Firebase con una librería JWT, según la guía oficial
+ * ("Verify ID tokens using a third-party JWT library"). Se evita firebase-admin/auth porque
+ * su dependencia jwks-rsa no carga en el runtime de Vercel.
+ */
+const GOOGLE_JWKS = createRemoteJWKSet(
+  new URL('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com')
+);
+
+export const verifyFirebaseIdToken = async (
+  token: string,
+  projectId: string,
+  keys: Parameters<typeof jwtVerify>[1] = GOOGLE_JWKS
+): Promise<string> => {
+  const { payload } = await jwtVerify(token, keys, {
+    issuer: `https://securetoken.google.com/${projectId}`,
+    audience: projectId,
+    algorithms: ['RS256'],
+  });
+  const authTime = typeof payload.auth_time === 'number' ? payload.auth_time : Number.NaN;
+  if (typeof payload.sub !== 'string' || !payload.sub || !(authTime <= Date.now() / 1000 + 300)) {
+    throw new Error('invalid-token');
+  }
+  return payload.sub;
+};
+
 export const createDeps = (config: MailConfig): MailDeps => {
   const app = getApps().length > 0 ? getApp() : initializeApp({ credential: cert(config.serviceAccount) });
   const transport = nodemailer.createTransport({
     service: 'gmail',
     auth: { user: config.gmailUser, pass: config.gmailAppPassword },
   });
-  const auth = getAuth(app);
   return {
     db: getFirestore(app),
-    verifyIdToken: async (token) => (await auth.verifyIdToken(token)).uid,
+    verifyIdToken: (token) => verifyFirebaseIdToken(token, config.serviceAccount.projectId),
     sendMail: async (mail) => {
       await transport.sendMail(mail);
     },
