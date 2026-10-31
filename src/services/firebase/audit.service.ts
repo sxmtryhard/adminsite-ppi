@@ -24,6 +24,7 @@ export const AUDIT_LABELS: Record<AuditAction, string> = {
   'barber.commission_changed': 'Comisión de barbero',
   'settings.updated': 'Configuración del negocio',
   'data.migrated': 'Migración de datos antiguos',
+  'branding.updated': 'Logo del local',
 };
 
 export const auditService = {

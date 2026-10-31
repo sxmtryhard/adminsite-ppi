@@ -1,5 +1,6 @@
 import { formatCOP, formatDateTime } from '@/lib/format';
 import { PAYMENT_LABELS, type Sale } from '@/types/sale.types';
+import { isLogoDataUrl } from './resizeImage';
 
 const escapeHtml = (value: string) =>
   value.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
@@ -8,7 +9,7 @@ const escapeHtml = (value: string) =>
  * Abre el comprobante de una venta en una ventana nueva lista para imprimir o guardar en PDF.
  * Es un comprobante interno de venta, no una factura electrónica (DIAN).
  */
-export const printReceipt = (sale: Sale, business: { name: string; phone: string; address: string }): boolean => {
+export const printReceipt = (sale: Sale, business: { name: string; phone: string; address: string; logo?: string | null }): boolean => {
   const win = window.open('', '_blank', 'width=420,height=640');
   if (!win) return false;
 
@@ -27,6 +28,7 @@ export const printReceipt = (sale: Sale, business: { name: string; phone: string
   .void{color:#b91c1c;font-weight:700;border:2px solid #b91c1c;padding:6px;text-align:center;margin:8px 0}
   @media print{button{display:none}body{margin:8px}}
 </style></head><body>
+${business.logo && isLogoDataUrl(business.logo) ? `<img src="${business.logo}" alt="" style="width:64px;height:64px;object-fit:contain;margin-bottom:6px">` : ''}
 <h1>${escapeHtml(business.name)}</h1>
 <div class="muted">${escapeHtml(business.address)}${business.phone ? ' · ' + escapeHtml(business.phone) : ''}</div>
 <p class="muted">Comprobante de venta N.º ${sale.id.slice(0, 8).toUpperCase()}<br>${formatDateTime(sale.createdAt)}</p>

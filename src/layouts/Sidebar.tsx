@@ -6,6 +6,7 @@ import { initials } from '@/lib/format';
 import { useAuth } from '@/context/auth-context';
 import { ROLE_LABELS } from '@/types/auth.types';
 import { NAVIGATION } from './navigation';
+import { BrandMark } from '@/components/common/BrandMark';
 
 interface SidebarProps {
   collapsed: boolean;
@@ -34,9 +35,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed, onToggleCollapsed, 
         <div className="flex h-16 items-center justify-between px-4">
           {!compact && (
             <div className="flex items-center gap-2.5 overflow-hidden">
-              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-accent to-accent-strong text-xs font-bold tracking-wider text-white">
-                X
-              </div>
+              <BrandMark className="h-8 w-8 text-xs" />
               <div className="leading-tight">
                 <p className="truncate text-sm font-semibold text-ink">XAC Studio</p>
                 <p className="text-[11px] text-subtle">{ROLE_LABELS[user.role]}</p>

@@ -17,12 +17,14 @@ import { formatCOP, formatDateTime } from '@/lib/format';
 import { exportToCSV } from '@/utils/exportCsv';
 import { printReceipt } from '@/utils/printReceipt';
 import { useSettings } from '@/hooks/useSettings';
+import { useLogo } from '@/hooks/useBranding';
 import { PAYMENT_LABELS, type PaymentMethod, type Sale } from '@/types/sale.types';
 import type { AppointmentStatus } from '@/types/appointment.types';
 
 export const HistoryPage: React.FC = () => {
   const { actor } = useSession();
   const { settings } = useSettings();
+  const logo = useLogo();
   const today = businessDate();
   const [tab, setTab] = useState<'sales' | 'appointments'>('sales');
   const [range, setRange] = useState({ from: addDays(today, -29), to: today });
@@ -249,7 +251,7 @@ export const HistoryPage: React.FC = () => {
                             size="sm"
                             variant="ghost"
                             onClick={() => {
-                              const ok = printReceipt(s, { name: settings.studioName, phone: settings.phone, address: settings.address });
+                              const ok = printReceipt(s, { name: settings.studioName, phone: settings.phone, address: settings.address, logo });
                               setNotice(ok ? null : 'El navegador bloqueó la ventana del comprobante. Permite ventanas emergentes para este sitio.');
                             }}
                           >

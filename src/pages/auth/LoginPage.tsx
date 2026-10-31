@@ -56,6 +56,9 @@ export const LoginPage: React.FC = () => {
           <Link to="/registro" className="font-medium text-accent hover:underline">
             Regístrate como cliente
           </Link>
+          <Link to="/instalar" className="mt-3 block text-xs text-subtle hover:text-ink">
+            📲 Instalar la app en tu celular
+          </Link>
         </>
       }
     >

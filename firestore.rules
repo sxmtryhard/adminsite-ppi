@@ -83,6 +83,20 @@ service cloud.firestore {
         && incoming().bookingWindowDays is int && incoming().bookingWindowDays >= 1 && incoming().bookingWindowDays <= 180;
     }
 
+    // Logo del local: público (login y página de instalación) y editable solo por el admin.
+    // Imagen pequeña en base64; el tope coincide con MAX_LOGO_CHARS del frontend.
+    match /branding/{docId} {
+      allow read: if true;
+      allow write: if isAdmin() && docId == 'current'
+        && incoming().keys().hasOnly(['logo', 'updatedAt', 'updatedBy'])
+        && incoming().updatedAt == request.time
+        && incoming().updatedBy == request.auth.uid
+        && (incoming().logo == null
+          || (incoming().logo is string && incoming().logo.size() <= 150000
+            && incoming().logo.matches('^data:image/(webp|png|jpeg);base64,[A-Za-z0-9+/=]+$')));
+      allow delete: if false;
+    }
+
     // ---------- Clientes ----------
     match /clients/{clientId} {
       // El barbero no lee la colección: recibe en la cita solo nombre y teléfono del cliente.

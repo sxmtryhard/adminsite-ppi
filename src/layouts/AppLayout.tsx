@@ -2,10 +2,13 @@ import React, { useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
+import { InstallBanner } from '@/components/pwa/InstallBanner';
+import { useAuth } from '@/context/auth-context';
 
 export const AppLayout: React.FC = () => {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { user } = useAuth();
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-bg text-ink">
@@ -22,6 +25,7 @@ export const AppLayout: React.FC = () => {
         <Header onOpenMenu={() => setMobileOpen(true)} />
         <main id="contenido" className="flex-1 overflow-y-auto px-4 py-6 sm:px-8 sm:py-8">
           <div className="mx-auto w-full max-w-7xl space-y-6">
+            <InstallBanner isClient={user?.role === 'client'} />
             <Outlet />
           </div>
         </main>

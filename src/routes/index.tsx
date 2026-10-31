@@ -12,6 +12,8 @@ const page =
   async () => ({ Component: (await loader())[name] as React.ComponentType });
 
 export const router = createBrowserRouter([
+  // Pública con o sin sesión: destino del código QR del local.
+  { path: '/instalar', lazy: page(() => import('@/pages/install/InstallPage'), 'InstallPage') },
   {
     element: <PublicOnlyRoute />,
     children: [
@@ -44,6 +46,7 @@ export const router = createBrowserRouter([
               { path: 'usuarios', lazy: page(() => import('@/pages/users/UsersPage'), 'UsersPage') },
               { path: 'auditoria', lazy: page(() => import('@/pages/audit/AuditPage'), 'AuditPage') },
               { path: 'configuracion', lazy: page(() => import('@/pages/settings/SettingsPage'), 'SettingsPage') },
+              { path: 'promocion', lazy: page(() => import('@/pages/promote/PromotePage'), 'PromotePage') },
             ],
           },
           {

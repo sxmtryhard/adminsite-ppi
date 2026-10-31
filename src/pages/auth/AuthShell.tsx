@@ -1,5 +1,5 @@
 import React from 'react';
-import { Scissors } from 'lucide-react';
+import { BrandMark } from '@/components/common/BrandMark';
 
 export const AuthShell: React.FC<{ title: string; subtitle: string; children: React.ReactNode; footer?: React.ReactNode }> = ({
   title,
@@ -14,9 +14,7 @@ export const AuthShell: React.FC<{ title: string; subtitle: string; children: Re
     />
     <main className="relative w-full max-w-sm">
       <div className="mb-8 text-center">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-accent to-accent-strong text-white shadow-[0_8px_30px_rgba(79,70,229,0.45)]">
-          <Scissors className="h-5 w-5" aria-hidden />
-        </div>
+        <BrandMark className="mx-auto mb-4 h-14 w-14 rounded-2xl text-lg shadow-[0_8px_30px_rgba(79,70,229,0.45)]" />
         <p className="text-[11px] font-semibold uppercase tracking-[0.3em] text-subtle">XAC Barber Studio</p>
         <h1 className="mt-2 text-2xl font-semibold tracking-tight text-ink">{title}</h1>
         <p className="mt-1 text-sm text-muted">{subtitle}</p>

@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Building2, CalendarClock, DatabaseZap } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { Building2, CalendarClock, DatabaseZap, ImagePlus, Trash2 } from 'lucide-react';
 import { Card, PageHeader } from '@/components/common/Layout';
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
@@ -12,8 +12,70 @@ import { useAsync } from '@/hooks/useAsync';
 import { toUserMessage } from '@/services/firebase/helpers';
 import { cleanText } from '@/domain/validation';
 import type { BusinessSettings } from '@/types/settings.types';
+import { BrandMark } from '@/components/common/BrandMark';
+import { useLogo } from '@/hooks/useBranding';
+import { brandingService } from '@/services/firebase/branding.service';
+import { imageToLogo } from '@/utils/resizeImage';
 
 const intIn = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
+
+/** Logo del local: se reduce en el navegador a 256 px y se guarda en Firestore. */
+const LogoCard: React.FC = () => {
+  const { actor } = useSession();
+  const logo = useLogo();
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ tone: 'success' | 'error'; text: string } | null>(null);
+
+  const apply = async (next: string | null, done: string) => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await brandingService.setLogo(next, actor);
+      setMessage({ tone: 'success', text: done });
+    } catch (err) {
+      setMessage({ tone: 'error', text: toUserMessage(err, 'No fue posible guardar el logo.') });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const dataUrl = await imageToLogo(file);
+      await apply(dataUrl, 'Logo actualizado. Ya se ve en el menú, el inicio de sesión y los comprobantes.');
+    } catch (err) {
+      // imageToLogo solo lanza errores con mensajes pensados para el usuario.
+      setMessage({ tone: 'error', text: err instanceof Error ? err.message : 'No fue posible procesar la imagen.' });
+    }
+  };
+
+  return (
+    <Card title="Logo del local" icon={ImagePlus} description="Se muestra en el menú, el inicio de sesión, la página de instalación y los comprobantes.">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+        <BrandMark className="h-20 w-20 rounded-2xl text-2xl" />
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" onClick={() => input.current?.click()} isLoading={busy}>
+              <ImagePlus className="h-4 w-4" aria-hidden /> {logo ? 'Cambiar logo' : 'Subir logo'}
+            </Button>
+            {logo && (
+              <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => apply(null, 'Se restauró el logo por defecto.')}>
+                <Trash2 className="h-4 w-4" aria-hidden /> Quitar
+              </Button>
+            )}
+          </div>
+          <p className="text-xs text-subtle">JPG, PNG o WebP de hasta 10 MB. Se ajusta a un cuadrado de 256 px sin recortar; funciona mejor con fondo transparente o de un solo color.</p>
+          <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={onFile} />
+        </div>
+      </div>
+      {message && <Alert tone={message.tone} className="mt-3">{message.text}</Alert>}
+    </Card>
+  );
+};
 
 /** Detecta y adapta documentos creados con la versión anterior del sistema. */
 const MigrationCard: React.FC = () => {
@@ -178,6 +240,7 @@ export const SettingsPage: React.FC = () => {
           </Button>
         </div>
       </form>
+      <LogoCard />
       <MigrationCard />
     </>
   );
