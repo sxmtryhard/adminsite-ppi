@@ -10,7 +10,8 @@ Sistema web integral de gestión operativa y administrativa para barberías y sa
 * **Estilos & Diseño:** Tailwind CSS 3 con tokens de diseño propios, Lucide React, framer-motion.
 * **Enrutamiento:** React Router 7 (`createBrowserRouter`, rutas por rol y carga diferida).
 * **Backend as a Service:** Firebase Authentication + Cloud Firestore con reglas de seguridad versionadas (`firestore.rules`).
-* **Pruebas:** Vitest (lógica de dominio: finanzas, disponibilidad, estados, validaciones).
+* **Pruebas:** Vitest (dominio, plantillas de correo, verificación de tokens) y pruebas de `firestore.rules` contra el emulador de Firebase. CI en GitHub Actions.
+* **Servidor:** funciones de Vercel en `api/` con lógica portable en `server/` (correo automático, ver `docs/CORREO.md`).
 
 ## 👥 Perfiles
 
@@ -34,6 +35,7 @@ Antes de usarla, publica `firestore.rules` y crea el primer administrador: ver [
 |---|---|
 | `npm run dev` | Servidor de desarrollo |
 | `npm test` | Pruebas unitarias |
+| `npm run test:rules` | Reglas de seguridad y correo contra el emulador de Firestore (requiere Java 11+) |
 | `npm run typecheck` | Comprobación de tipos |
 | `npm run lint` | ESLint |
 | `npm run build` | Build de producción |

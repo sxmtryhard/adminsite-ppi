@@ -52,11 +52,11 @@ URL: https://adminsite-ppi.vercel.app · Duración sugerida: 15–20 min.
 
 | Pregunta | Respuesta |
 |---|---|
-| ¿Y si dos clientes reservan a la vez? | Transacción + documento de bloqueo por franja; las reglas impiden sobrescribirlo. |
+| ¿Y si dos clientes reservan a la vez? | Transacción + documento de bloqueo por franja; las reglas impiden sobrescribirlo. Además, cada franja exige la anterior de la misma cita, así una cita larga no puede dejar huecos. |
 | ¿Cómo evitan que un cliente vea datos de otro? | Reglas de Firestore por rol y propiedad; las consultas del cliente solo traen sus documentos. |
-| ¿Por qué no hay SMS/recordatorios por correo? | Requieren plan Blaze (de pago) y un proveedor (Cloud Functions + SendGrid/Twilio). La verificación usa el proveedor real de Firebase Authentication. |
+| ¿Hay correos automáticos? | Sí: funciones en el servidor (Vercel) verifican el token de Firebase, leen la cita en el servidor y envían un correo por perfil, una sola vez por evento, más un recordatorio diario a las 8:00. Se activan con las credenciales (docs/CORREO.md). Los SMS requieren un proveedor de pago. |
 | ¿Cómo se calcula el costo de un producto? | Costo promedio ponderado con cada entrada de inventario; se congela en la venta. |
-| ¿Pruebas? | 34 pruebas automáticas (fórmulas financieras, disponibilidad, estados, validaciones) con Vitest. |
+| ¿Pruebas? | 49 pruebas unitarias (finanzas, disponibilidad, estados, plantillas, verificación de tokens) y 47 contra el emulador de Firebase: 39 intentan romper las reglas de seguridad (escalar rol, ver datos ajenos, alterar precios, doble reserva, avisos falsos) y 8 prueban el correo de extremo a extremo. Corren solas en GitHub Actions con cada cambio. |
 
 ## Si algo falla en vivo
 - **No salen horas** → el barbero no tiene horario (la pantalla lo indica) o el día está bloqueado.
