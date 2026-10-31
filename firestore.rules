@@ -31,6 +31,16 @@ service cloud.firestore {
     function isDate(v) { return v is string && v.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$'); }
     function isTime(v) { return v is string && v.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$'); }
 
+    // Minutos del día <-> 'HHmm' (formato del sufijo de los ids de franja).
+    function hhmm(m) {
+      return (m < 600 ? '0' : '') + string(int((m - m % 60) / 60)) + (m % 60 < 10 ? '0' : '') + string(m % 60);
+    }
+    function timeMinutes(t) { return int(t.split(':')[0]) * 60 + int(t.split(':')[1]); }
+    function slotMinutes(slotId) {
+      let hm = int(slotId.split('_')[2]);
+      return int((hm - hm % 100) / 100) * 60 + hm % 100;
+    }
+
     // Política de cancelación configurable (config/business). 3 h si aún no se ha configurado.
     function cancellationHours() {
       return exists(path('config', 'business'))
@@ -186,12 +196,21 @@ service cloud.firestore {
     // reservas superpuestas incluso con solicitudes simultáneas (create falla si ya existe).
     match /slots/{slotId} {
       allow read: if signedIn();
+      // Cadena: cada franja (salvo la primera) exige que la anterior exista y sea de la misma
+      // cita. Como la cita exige la primera y la última, quedan bloqueadas todas las intermedias.
+      function previousSlotId(id) {
+        return id.split('_')[0] + '_' + id.split('_')[1] + '_' + hhmm(slotMinutes(id) - 15);
+      }
       allow create: if signedIn()
+        && incoming().keys().hasOnly(['appointmentId', 'barberId', 'date'])
         && existsAfter(path('appointments', incoming().appointmentId))
         && getAfter(path('appointments', incoming().appointmentId)).data.barberId == incoming().barberId
         && getAfter(path('appointments', incoming().appointmentId)).data.date == incoming().date
         && slotId in getAfter(path('appointments', incoming().appointmentId)).data.slotIds
-        && getAfter(path('appointments', incoming().appointmentId)).data.status in ['pending', 'confirmed', 'in_progress'];
+        && getAfter(path('appointments', incoming().appointmentId)).data.status in ['pending', 'confirmed', 'in_progress']
+        && (slotId == getAfter(path('appointments', incoming().appointmentId)).data.slotIds[0]
+          || (existsAfter(path('slots', previousSlotId(slotId)))
+            && getAfter(path('slots', previousSlotId(slotId))).data.appointmentId == incoming().appointmentId));
       allow update: if false;
       // Se libera cuando la cita deja de ocuparla (cancelada/finalizada o reprogramada).
       allow delete: if signedIn()
@@ -211,6 +230,8 @@ service cloud.firestore {
         return data.slotIds is list
           && data.slotIds.size() == math.ceil(data.durationMinutes / 15.0)
           && data.slotIds[0] == data.barberId + '_' + data.date + '_' + data.time.replace(':', '')
+          && data.slotIds[data.slotIds.size() - 1]
+            == data.barberId + '_' + data.date + '_' + hhmm(timeMinutes(data.time) + (data.slotIds.size() - 1) * 15)
           && existsAfter(path('slots', data.slotIds[0]))
           && existsAfter(path('slots', data.slotIds[data.slotIds.size() - 1]));
       }
@@ -230,13 +251,23 @@ service cloud.firestore {
         || (isClient() && resource.data.clientId == request.auth.uid);
 
       allow create: if signedIn()
+        && incoming().keys().hasOnly(['clientId', 'clientName', 'clientPhone', 'barberId', 'barberName',
+          'serviceId', 'serviceName', 'servicePrice', 'durationMinutes', 'date', 'time', 'notes', 'startAt',
+          'slotIds', 'status', 'saleId', 'cancelReason', 'clientUserId', 'barberUserId', 'createdBy',
+          'createdAt', 'updatedAt'])
         && incoming().createdBy == request.auth.uid
         && incoming().saleId == null
         && incoming().cancelReason == null
         && isDate(incoming().date) && isTime(incoming().time)
         && incoming().startAt is timestamp && incoming().startAt > request.time
         && isText(incoming().notes, 300)
-        // Precio y duración vienen del catálogo, no del cliente.
+        && isName(incoming().clientName) && isText(incoming().clientPhone, 20)
+        // Los nombres mostrados, el precio y la duración vienen del catálogo, no del cliente.
+        && get(path('services', incoming().serviceId)).data.name == incoming().serviceName
+        && get(path('barbers', incoming().barberId)).data.fullName == incoming().barberName
+        // Destinatarios de los avisos: el propio cliente (si tiene cuenta) y la cuenta del barbero.
+        && (incoming().clientUserId == null || incoming().clientUserId == incoming().clientId)
+        && incoming().barberUserId == get(path('barbers', incoming().barberId)).data.get('userId', null)
         && get(path('services', incoming().serviceId)).data.status == 'active'
         && get(path('services', incoming().serviceId)).data.price == incoming().servicePrice
         && get(path('services', incoming().serviceId)).data.durationMinutes == incoming().durationMinutes
@@ -331,6 +362,11 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // Registro de correos enviados: solo lo usa el servidor (Admin SDK, que no pasa por estas reglas).
+    match /mailLog/{key} {
+      allow read, write: if false;
+    }
+
     match /notifications/{notificationId} {
       // Personal (userId) o bandeja compartida de administración (audience == 'admin').
       function isRecipient(data) {
@@ -338,12 +374,22 @@ service cloud.firestore {
           || (data.get('audience', null) == 'admin' && isAdmin());
       }
       allow read: if isRecipient(resource.data);
+      // Solo quien participa en la cita puede avisar, y solo a los otros participantes de esa
+      // cita (cliente, barbero asignado) o a la bandeja de administración.
+      function appt() { return get(path('appointments', incoming().appointmentId)).data; }
       allow create: if hasProfile()
+        && incoming().keys().hasOnly(['userId', 'audience', 'title', 'body', 'link', 'read', 'actorUid', 'appointmentId', 'createdAt'])
         && incoming().actorUid == request.auth.uid
         && incoming().read == false
+        && incoming().createdAt == request.time
         && isText(incoming().title, 120)
         && isText(incoming().body, 400)
-        && ((incoming().userId is string && incoming().get('audience', null) == null)
+        && (incoming().link == null || (isText(incoming().link, 100) && incoming().link.matches('^/[a-z/]*$')))
+        && incoming().appointmentId is string
+        && exists(path('appointments', incoming().appointmentId))
+        && (isAdmin() || appt().get('clientUserId', null) == request.auth.uid || appt().get('barberUserId', null) == request.auth.uid)
+        && ((incoming().userId is string && incoming().audience == null
+              && incoming().userId in [appt().get('clientUserId', null), appt().get('barberUserId', null)])
           || (incoming().userId == null && incoming().audience == 'admin'));
       allow update: if isRecipient(existing()) && onlyChanged(['read']);
       allow delete: if isRecipient(existing());

@@ -20,12 +20,14 @@ export interface NotificationInput {
   title: string;
   body: string;
   link: string | null;
+  /** Cita que origina el aviso: las reglas solo dejan avisar a sus participantes. */
+  appointmentId: string;
 }
 
 export const notificationsService = {
   /**
-   * Notificaciones dentro de la aplicación. No envían correo ni SMS: eso requiere un
-   * proveedor externo y Cloud Functions (plan Blaze), pendiente de configuración.
+   * Notificaciones dentro de la aplicación. El correo lo envía aparte el servidor
+   * (api/notificar), que lee la cita directamente de Firestore.
    */
   async notify(input: NotificationInput, actor: Actor): Promise<void> {
     const recipients = [...new Set(input.userIds.filter((u): u is string => Boolean(u) && u !== actor.uid))];
@@ -40,6 +42,7 @@ export const notificationsService = {
         link: input.link,
         read: false,
         actorUid: actor.uid,
+        appointmentId: input.appointmentId,
         createdAt: serverTimestamp(),
       });
     }
@@ -59,6 +62,7 @@ export const notificationsService = {
       link: input.link,
       read: false,
       actorUid: actor.uid,
+      appointmentId: input.appointmentId,
       createdAt: serverTimestamp(),
     });
   },
